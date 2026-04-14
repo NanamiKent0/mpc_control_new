@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import math
 
+from ..controllers.turn_reference_mapper import module_heading_deg
 from ..kinematics import ChainSnapshot
 from ..kinematics.frame_conventions import adjacent_active_passive_pairs, pair_key
 from ..models.module_state import ModuleState
@@ -18,6 +19,8 @@ from .module_state_estimator import (
 from ...runtime_integration.observation_types import RuntimeObservationFrame
 
 RELATION_ESTIMATOR_SOURCE = "control_core.estimation.relation_estimator"
+RELATION_COUPLING_DISTANCE_THRESHOLD_MM = 1.0
+RELATION_COUPLING_ORIENTATION_THRESHOLD_DEG = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +113,14 @@ class RelationEstimator:
             and orientation_error_deg is not None
             and (runtime_observation_valid or geometry_valid)
         )
-        coupled = None if pair_observation is None else pair_observation.coupled
+        coupled = _resolve_coupled_state(
+            pair_observation=pair_observation,
+            relation_type=relation_type,
+            active_module=active_module,
+            passive_module=passive_module,
+            distance_mm=distance_mm,
+            orientation_error_deg=orientation_error_deg,
+        )
         diagnostics = {
             "relation_source": RELATION_ESTIMATOR_SOURCE,
             "pair_key": pair_key(active_module, passive_module),
@@ -124,7 +134,28 @@ class RelationEstimator:
             "coupled_source": (
                 None
                 if coupled is None
-                else "runtime_pair_observation"
+                else _coupled_source(pair_observation, relation_type, active_module, passive_module)
+            ),
+            "coupling_rule": _coupling_rule_name(relation_type, active_module, passive_module),
+            "orientation_required_for_coupling": _orientation_required_for_coupling(
+                relation_type,
+                active_module,
+                passive_module,
+            ),
+            "tip_heading_current_deg": (
+                None
+                if {active_module, passive_module} != {"joint1", "tip"}
+                else module_heading_deg(chain_snapshot, "tip")
+            ),
+            "joint1_heading_current_deg": (
+                None
+                if {active_module, passive_module} != {"joint1", "tip"}
+                else module_heading_deg(chain_snapshot, "joint1")
+            ),
+            "joint1_bend_current_deg": (
+                None
+                if {active_module, passive_module} != {"joint1", "tip"}
+                else _joint1_bend_current_deg(module_states)
             ),
             "relation_validity_source": _relation_validity_source(
                 runtime_observation_valid=runtime_observation_valid,
@@ -231,7 +262,72 @@ def _finite_optional_scalar(value: object) -> bool:
         return False
 
 
+def _joint1_bend_current_deg(module_states: Mapping[str, ModuleState]) -> float | None:
+    joint1_state = module_states.get("joint1")
+    if joint1_state is None:
+        return None
+    bend_deg = joint1_state.dofs.get("bend_deg")
+    if bend_deg is None:
+        return None
+    return float(bend_deg)
+
+
+def _coupling_rule_name(relation_type: RelationType, active_module: str, passive_module: str) -> str:
+    if relation_type == "tip_joint" and active_module == "joint1" and passive_module == "tip":
+        return "joint1_tip_capture_only"
+    return "distance_and_orientation"
+
+
+def _orientation_required_for_coupling(
+    relation_type: RelationType,
+    active_module: str,
+    passive_module: str,
+) -> bool:
+    return not (
+        relation_type == "tip_joint"
+        and active_module == "joint1"
+        and passive_module == "tip"
+    )
+
+
+def _resolve_coupled_state(
+    *,
+    pair_observation: object,
+    relation_type: RelationType,
+    active_module: str,
+    passive_module: str,
+    distance_mm: float | None,
+    orientation_error_deg: float | None,
+) -> bool | None:
+    if pair_observation is not None and getattr(pair_observation, "coupled", None) is not None:
+        return bool(getattr(pair_observation, "coupled"))
+    if distance_mm is None:
+        return None
+    distance_ready = float(distance_mm) <= RELATION_COUPLING_DISTANCE_THRESHOLD_MM
+    if not _orientation_required_for_coupling(relation_type, active_module, passive_module):
+        return bool(distance_ready)
+    if orientation_error_deg is None:
+        return None
+    orientation_ready = abs(float(orientation_error_deg)) <= RELATION_COUPLING_ORIENTATION_THRESHOLD_DEG
+    return bool(distance_ready and orientation_ready)
+
+
+def _coupled_source(
+    pair_observation: object,
+    relation_type: RelationType,
+    active_module: str,
+    passive_module: str,
+) -> str:
+    if pair_observation is not None and getattr(pair_observation, "coupled", None) is not None:
+        return "runtime_pair_observation"
+    if _orientation_required_for_coupling(relation_type, active_module, passive_module):
+        return "relation_estimator_distance_and_orientation_fallback"
+    return "relation_estimator_distance_only_fallback"
+
+
 __all__ = [
+    "RELATION_COUPLING_DISTANCE_THRESHOLD_MM",
+    "RELATION_COUPLING_ORIENTATION_THRESHOLD_DEG",
     "RELATION_ESTIMATOR_SOURCE",
     "RelationEstimator",
     "RelationEstimatorConfig",

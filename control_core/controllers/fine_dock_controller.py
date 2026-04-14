@@ -68,7 +68,14 @@ class FineDockController(PairControllerSupportMixin):
             for axis in (axis.strip().lower() for axis in spec.list_param("required_axes"))
             if axis in {"distance", "orientation"}
         )
-        if configured_axes:
+        tip_joint_capture_only = (
+            relation_state.relation_type == "tip_joint"
+            and relation_state.active_module == "joint1"
+            and relation_state.passive_module == "tip"
+        )
+        if tip_joint_capture_only:
+            required_axes = ("distance",)
+        elif configured_axes:
             required_axes = configured_axes
         elif active_module_type == "joint":
             required_axes = ("distance", "orientation")
@@ -83,6 +90,12 @@ class FineDockController(PairControllerSupportMixin):
                 "unsupported_axes": ",".join(unsupported_axes) or None,
                 "current_distance_mm": relation_state.distance_mm,
                 "current_orientation_error_deg": relation_state.orientation_error_deg,
+                "coupling_rule": (
+                    "joint1_tip_capture_only"
+                    if tip_joint_capture_only
+                    else "distance_and_orientation"
+                ),
+                "orientation_required_for_coupling": not tip_joint_capture_only,
                 "topology_pair_allowed": topology_gate["pair_allowed"],
                 "topology_block_reason": topology_gate["block_reason"],
             },
@@ -187,6 +200,7 @@ class FineDockController(PairControllerSupportMixin):
                 dt=dt,
                 limits=spec.limits,
                 config=spec.config,
+                enable_orientation="orientation" in required_axes,
             )
             references = [
                 PrimitiveReference(

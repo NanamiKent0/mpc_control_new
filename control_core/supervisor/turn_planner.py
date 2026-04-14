@@ -10,16 +10,17 @@ from .plan_nodes import (
     FrontCooperateNode,
     LocalTransferNode,
     ReturnToFreeGrowthNode,
+    SUPPORTED_TURN_PLAN_JOINT_IDS,
     TurnPlanNode,
 )
-from .selection_policy import FIXED_FRONT_SELECTION_JOINT_IDS, select_front_joint_candidate
+from .selection_policy import select_front_joint_candidate
 
 if TYPE_CHECKING:
     from ..estimation import EstimateBundle
 
 
 TURN_PLANNER_SOURCE = "control_core.supervisor.turn_planner"
-SUPPORTED_TURN_PLANNER_JOINT_IDS = FIXED_FRONT_SELECTION_JOINT_IDS
+SUPPORTED_TURN_PLANNER_JOINT_IDS = SUPPORTED_TURN_PLAN_JOINT_IDS
 SUPPORTED_TURN_PLANNER_JOINT_INDEXES = tuple(
     range(1, len(SUPPORTED_TURN_PLANNER_JOINT_IDS) + 1)
 )
@@ -57,6 +58,7 @@ def build_direct_front_cooperation_plan(
     ]
     plan = FrontCooperationPlan(
         plan_kind=FRONT_COOPERATION_PLAN_KIND,
+        planner_mode="direct",
         selected_joint_id=resolved_selection.selected_joint_id,
         selected_joint_index=resolved_selection.selected_joint_index,
         selection_reason=resolved_selection.selection_reason,
@@ -106,6 +108,7 @@ def build_recursive_transfer_plan(
     )
     plan = FrontCooperationPlan(
         plan_kind=FRONT_COOPERATION_PLAN_KIND,
+        planner_mode="recursive",
         selected_joint_id=resolved_selection.selected_joint_id,
         selected_joint_index=resolved_selection.selected_joint_index,
         selection_reason=resolved_selection.selection_reason,
@@ -139,6 +142,7 @@ def _build_invariant_violation_plan(
     )
     plan = FrontCooperationPlan(
         plan_kind=FRONT_COOPERATION_PLAN_KIND,
+        planner_mode=None,
         selected_joint_id=None,
         selected_joint_index=None,
         selection_reason=resolved_selection.selection_reason,
@@ -188,10 +192,14 @@ def _build_plan_diagnostics(
     diagnostics: dict[str, object] = {
         "planner_source": TURN_PLANNER_SOURCE,
         "joint_order": list(SUPPORTED_TURN_PLANNER_JOINT_IDS),
+        "plan_kind": plan.plan_kind,
+        "planner_mode": plan.planner_mode,
         "selection_reason": plan.selection_reason,
         "selection_diagnostics": dict(selection_result.diagnostics),
         "selected_joint_id": plan.selected_joint_id,
         "selected_joint_index": plan.selected_joint_index,
+        "direct_front_cooperation": plan.direct_front_cooperation,
+        "requires_recursive_transfer": plan.requires_recursive_transfer,
         "ordered_node_ids": ordered_node_ids,
         "ordered_node_kinds": ordered_node_kinds,
         "transfer_chain": transfer_chain,
@@ -225,6 +233,9 @@ def _collect_turn_planner_invariant_errors(plan: FrontCooperationPlan) -> list[s
         expected_joint_id = _joint_id_for_index(selected_joint_index)
         if selected_joint_id != expected_joint_id:
             errors.append("selected_joint_id_index_mismatch")
+    expected_planner_mode = "direct" if selected_joint_index == 1 else "recursive"
+    if plan.planner_mode != expected_planner_mode:
+        errors.append("planner_mode_mismatch")
     if plan.direct_front_cooperation is not (selected_joint_index == 1):
         errors.append("direct_front_cooperation_flag_mismatch")
     if plan.requires_recursive_transfer is not (selected_joint_index in {2, 3, 4, 5}):

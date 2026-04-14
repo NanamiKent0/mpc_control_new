@@ -88,7 +88,6 @@ class PairControllerSupportMixin:
         context: ExecutionContext | None,
     ) -> dict[str, object]:
         """Evaluate pair legality against the available topology."""
-        del spec
         resolved_topology, used_context_topology = self._resolve_topology(
             topology=topology,
             context=context,
@@ -99,19 +98,28 @@ class PairControllerSupportMixin:
                 "used_context_topology": used_context_topology,
                 "pair_allowed": True,
                 "block_reason": None,
+                "allow_off_frontier": False,
                 "topology_snapshot": {},
                 "frontier_snapshot": {},
                 "support_snapshot": {},
             }
+        allow_off_frontier = self._context_or_spec_bool(
+            spec,
+            context,
+            "allow_off_frontier",
+            default=False,
+        )
         pair_allowed, block_reason = resolved_topology.pair_allowed(
             relation_state.active_module,
             relation_state.passive_module,
+            allow_off_frontier=allow_off_frontier,
         )
         return {
             "topology": resolved_topology,
             "used_context_topology": used_context_topology,
             "pair_allowed": pair_allowed,
             "block_reason": block_reason,
+            "allow_off_frontier": allow_off_frontier,
             "topology_snapshot": resolved_topology.snapshot(),
             "frontier_snapshot": resolved_topology.frontier_snapshot(),
             "support_snapshot": resolved_topology.support_snapshot(),
@@ -158,6 +166,24 @@ class PairControllerSupportMixin:
             if value is not None:
                 return value
         value = self.safe_float(relation_state.diagnostics.get(name), None)
+        if value is not None:
+            return value
+        return default
+
+    def _context_or_spec_bool(
+        self,
+        spec: SkillSpec,
+        context: ExecutionContext | None,
+        name: str,
+        *,
+        default: bool = False,
+    ) -> bool:
+        """Resolve one boolean from context metadata first, then spec params."""
+        if context is not None and name in context.metadata:
+            value = self.normalize_bool(context.metadata.get(name))
+            if value is not None:
+                return value
+        value = self.normalize_bool(spec.params.get(name))
         if value is not None:
             return value
         return default

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from ..control_core.controllers.turn_reference_mapper import module_heading_deg
+from ..control_core.kinematics import compute_chain_snapshot
 from ..control_core.models.geometry_observation import GeometryObservation
 from ..control_core.models.module_state import ModuleState, make_joint_module_state, make_tip_module_state
 from ..control_core.topology.chain_topology import ChainTopology
@@ -208,6 +210,11 @@ def _geometry_observation_from_pair_observation(
         "state_builder_source": RUNTIME_STATE_BUILDER_SOURCE,
         "runtime_frame_timestamp_ns": _diagnostic_value(frame.timestamp_ns),
         **_flatten_diagnostics(observation.diagnostics),
+        **_pair_heading_diagnostics(
+            frame,
+            active_module=observation.active_module,
+            passive_module=observation.passive_module,
+        ),
     }
     return GeometryObservation(
         observation_kind=relation_type,
@@ -292,6 +299,46 @@ def _flatten_diagnostics(values: dict[str, object] | None) -> dict[str, Diagnost
     for key, value in dict(values or {}).items():
         flattened[str(key)] = _diagnostic_value(value)
     return flattened
+
+
+def _pair_heading_diagnostics(
+    frame: RuntimeObservationFrame,
+    *,
+    active_module: str,
+    passive_module: str,
+) -> dict[str, DiagnosticValue]:
+    """Return tip/joint1 heading diagnostics when the pair needs them."""
+    pair_modules = {str(active_module), str(passive_module)}
+    if "tip" not in pair_modules or "joint1" not in pair_modules:
+        return {}
+    try:
+        module_states = build_module_state_map(frame)
+        if "tip" not in module_states or "joint1" not in module_states:
+            return {}
+        ordered_modules = _ordered_modules_for_snapshot(frame, module_states)
+        snapshot = compute_chain_snapshot(module_states, ordered_modules=ordered_modules)
+    except (KeyError, TypeError, ValueError):
+        return {}
+    joint1_state = module_states.get("joint1")
+    return {
+        "tip_heading_current_deg": _diagnostic_value(module_heading_deg(snapshot, "tip")),
+        "joint1_heading_current_deg": _diagnostic_value(module_heading_deg(snapshot, "joint1")),
+        "joint1_bend_current_deg": _diagnostic_value(
+            None if joint1_state is None else joint1_state.dofs.get("bend_deg")
+        ),
+    }
+
+
+def _ordered_modules_for_snapshot(
+    frame: RuntimeObservationFrame,
+    module_states: dict[str, ModuleState],
+) -> list[str]:
+    """Resolve the module order used for runtime heading snapshots."""
+    topology_hint = frame.topology_hint or {}
+    ordered_modules = topology_hint.get("ordered_modules")
+    if isinstance(ordered_modules, (list, tuple)):
+        return [str(module_id) for module_id in ordered_modules if str(module_id) in module_states]
+    return list(module_states)
 
 
 def _diagnostic_value(value: object) -> DiagnosticValue:

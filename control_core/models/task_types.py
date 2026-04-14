@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from .skill_types import SkillExecutionResult, SkillSpec
 
 if TYPE_CHECKING:
     from ..orchestration.transition_policy import TransitionDecision
     from .runtime_bridge_types import SchedulerDispatchEnvelope
+
+
+TIP_FREE_GROWTH = "TIP_FREE_GROWTH"
+TIP_TURN_AUTONOMOUS = "TIP_TURN_AUTONOMOUS"
+HighLevelTaskKind = Literal["TIP_FREE_GROWTH", "TIP_TURN_AUTONOMOUS"]
+
+
+@dataclass(slots=True)
+class HighLevelTaskRequest:
+    """One high-level orchestration request compiled into a task graph."""
+
+    task_kind: HighLevelTaskKind
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

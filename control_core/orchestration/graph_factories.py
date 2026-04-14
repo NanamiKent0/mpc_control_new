@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from ..models.task_types import TaskGraphSpec
+from ..supervisor.front_cooperation_plan import FrontCooperationPlan
 from ..topology.relation_state import RelationType
 from .graph_builder import TaskGraphBuilder
 from .graph_fragments import (
     build_failure_sink_fragment,
     build_pair_approach_dock_fragment,
+)
+from .turn_plan_graph_adapter import (
+    build_tip_free_growth_graph as _build_tip_free_growth_graph,
+    build_turn_autonomous_graph_from_plan as _build_turn_autonomous_graph_from_plan,
 )
 
 
@@ -332,6 +337,32 @@ def build_runtime_demo_pair_graph(
         }
     )
     return graph
+
+
+def build_tip_free_growth_graph(
+    *,
+    graph_id: str = "tip_free_growth",
+    metadata: dict[str, object] | None = None,
+) -> TaskGraphSpec:
+    """Build the minimal steady-state tip free-growth graph."""
+    return _build_tip_free_growth_graph(
+        graph_id=graph_id,
+        metadata=metadata,
+    )
+
+
+def build_turn_autonomous_graph_from_plan(
+    plan: FrontCooperationPlan,
+    *,
+    graph_id: str | None = None,
+    metadata: dict[str, object] | None = None,
+) -> TaskGraphSpec:
+    """Compile one structured planner result into a scheduler graph."""
+    return _build_turn_autonomous_graph_from_plan(
+        plan,
+        graph_id=graph_id,
+        metadata=metadata,
+    )
 
 
 def _node_label(*, node_id: str, phase: object) -> str:

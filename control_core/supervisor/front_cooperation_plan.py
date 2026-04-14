@@ -15,6 +15,7 @@ class FrontCooperationPlan:
     """Planner output for the current fixed-range turn workflow."""
 
     plan_kind: str = FRONT_COOPERATION_PLAN_KIND
+    planner_mode: str | None = None
     selected_joint_id: str | None = None
     selected_joint_index: int | None = None
     selection_reason: str = "uninitialized"

@@ -259,11 +259,16 @@ class SimRuntimeBackend:
         if skill_key == "coarse_approach":
             setattr(state, coupling_attr, False)
             return
-        if distance_value is None or orientation_value is None:
+        if distance_value is None:
             return
         distance_ready = float(distance_value) <= 1.0
-        orientation_ready = abs(float(orientation_value)) <= 2.0
-        setattr(state, coupling_attr, bool(distance_ready and orientation_ready))
+        if _orientation_required_for_coupling(active_module, passive_module):
+            if orientation_value is None:
+                return
+            orientation_ready = abs(float(orientation_value)) <= 2.0
+            setattr(state, coupling_attr, bool(distance_ready and orientation_ready))
+            return
+        setattr(state, coupling_attr, bool(distance_ready))
 
 
 def _module_linear_drive(command: SimCommand, module_id: str) -> float:
@@ -306,6 +311,11 @@ def _move_toward_zero(current: float | None, *, drive_deg_s: float, dt: float) -
     if current_value < 0.0:
         return min(0.0, current_value + delta)
     return 0.0
+
+
+def _orientation_required_for_coupling(active_module: str, passive_module: str) -> bool:
+    """Return whether the pair still requires orientation closure before capture."""
+    return not (str(active_module) == "joint1" and str(passive_module) == "tip")
 
 
 __all__ = ["SIM_BACKEND_VERSION", "SimRuntimeBackend"]

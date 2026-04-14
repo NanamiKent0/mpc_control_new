@@ -203,6 +203,25 @@ Phase 11 restores the old working style of "independent sim visualizer + indepen
 - The canonical GUI is still only `runtime_integration/gui/gui_ros2.py`. The visualizer is not embedded into the GUI.
 - The migrated sim stack no longer imports legacy `sim` modules or legacy project paths.
 
+## Step 7 Semantic Update
+
+The Step-7 turn semantics now separate user intent from internal workflow execution:
+
+- 用户层高层意图只保留两种：
+  - `TIP_FREE_GROWTH`
+  - `TIP_TURN(target_heading_delta_deg)`
+- `TIP_TURN_AUTONOMOUS` 继续存在，但它只作为内部调度任务种类，不是用户 API。
+- `TIP_TURN(target_heading_delta_deg)` 会先基于当前 tip heading 计算：
+  - `tip_heading_target_deg = tip_heading_current_deg + target_heading_delta_deg`
+  然后再沿用已有的 `selection_policy -> turn_planner -> graph -> scheduler -> controller` 主链自动选择 `joint1~joint5` 的行为。
+- `joint1-tip` 现已正式采用全方向 capture 规则：
+  - 耦合成立只看 distance / capture
+  - `orientation_error_deg` 仍保留在 relation estimate / diagnostics 中
+  - 耦合后的 `front_cooperate` 阶段继续使用 orientation / heading 观测做协同转向闭环
+- `joint-joint` 仍保持原有的方向敏感耦合规则：
+  - `distance <= threshold`
+  - `abs(orientation_error_deg) <= threshold`
+
 ## Current Launch Path
 
 正式 GUI 入口固定为：

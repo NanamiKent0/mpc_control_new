@@ -37,7 +37,9 @@ from .legacy_extractors import (
 
 def _default_phase3_topology() -> ChainTopology:
     """Return the default chain ordering used by the scaffold."""
-    return ChainTopology(ordered_modules=["tip", "joint1", "joint2"])
+    return ChainTopology(
+        ordered_modules=["tip", "joint1", "joint2", "joint3", "joint4", "joint5"]
+    )
 
 
 class SkillControllerAdapter:

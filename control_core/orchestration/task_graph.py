@@ -25,6 +25,14 @@ class TaskGraph:
         """Return the graph start node."""
         return self.get_node(self.spec.start_node_id)
 
+    def metadata_value(self, key: str, default: object | None = None) -> object | None:
+        """Return one graph-level metadata value with a stable default."""
+        return self.spec.metadata.get(key, default)
+
+    def node_metadata(self, node_id: str) -> dict[str, object]:
+        """Return one node metadata mapping."""
+        return dict(self.get_node(node_id).metadata)
+
     def next_node(self, current_node_id: str, success: bool = True) -> TaskNode | None:
         """Return the next node for one transition outcome."""
         current_node = self.get_node(current_node_id)

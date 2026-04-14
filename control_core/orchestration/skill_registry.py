@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..skills.controller_backed_pair import FrontCooperateSkill, LocalTransferSkill
 from ..models.skill_types import SkillDescriptor, SkillResolutionResult
 from ..skills.coarse_approach import CoarseApproachSkill
 from ..skills.fine_dock import FineDockSkill
@@ -75,18 +76,26 @@ def build_default_skill_registry(
     coarse_skill: CoarseApproachSkill | None = None,
     fine_skill: FineDockSkill | None = None,
     terminal_skill: TerminalNoopSkill | None = None,
+    local_transfer_skill: LocalTransferSkill | None = None,
+    front_cooperate_skill: FrontCooperateSkill | None = None,
 ) -> SkillRegistry:
     """Build the default Phase-6 registry used by adapters and schedulers."""
     registry = SkillRegistry(source_name="default_skill_registry")
     resolved_coarse = coarse_skill or CoarseApproachSkill(topology=topology)
     resolved_fine = fine_skill or FineDockSkill(topology=topology)
     resolved_terminal = terminal_skill or TerminalNoopSkill(topology=topology)
+    resolved_local_transfer = local_transfer_skill or LocalTransferSkill(topology=topology)
+    resolved_front_cooperate = front_cooperate_skill or FrontCooperateSkill(topology=topology)
     if getattr(resolved_coarse, "topology", None) is None:
         resolved_coarse.topology = topology
     if getattr(resolved_fine, "topology", None) is None:
         resolved_fine.topology = topology
     if getattr(resolved_terminal, "topology", None) is None:
         resolved_terminal.topology = topology
+    if getattr(resolved_local_transfer, "topology", None) is None:
+        resolved_local_transfer.topology = topology
+    if getattr(resolved_front_cooperate, "topology", None) is None:
+        resolved_front_cooperate.topology = topology
     registry.register(
         "coarse_approach",
         resolved_coarse,
@@ -98,8 +107,28 @@ def build_default_skill_registry(
         metadata={"family": "relation_skill", "default_registry": True},
     )
     registry.register(
+        "local_transfer",
+        resolved_local_transfer,
+        metadata={"family": "turn_workflow", "default_registry": True},
+    )
+    registry.register(
+        "front_cooperate",
+        resolved_front_cooperate,
+        metadata={"family": "turn_workflow", "default_registry": True},
+    )
+    registry.register(
         "terminal_noop",
         resolved_terminal,
         metadata={"family": "terminal_skill", "default_registry": True},
+    )
+    registry.register(
+        "return_to_free_growth",
+        resolved_terminal,
+        metadata={"family": "terminal_skill", "default_registry": True, "semantic": "return"},
+    )
+    registry.register(
+        "tip_free_growth",
+        resolved_terminal,
+        metadata={"family": "terminal_skill", "default_registry": True, "semantic": "free_growth"},
     )
     return registry

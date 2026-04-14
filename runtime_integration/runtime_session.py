@@ -2,18 +2,33 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from ..control_core.models.execution_context import ExecutionContext
+from ..control_core.models.operator_intent_types import OperatorIntent
 from ..control_core.models.runtime_bridge_types import DispatchResult, SchedulerDispatchEnvelope
-from ..control_core.models.task_types import SchedulerStepResult, TaskGraphSpec
-from ..control_core.orchestration.graph_factories import build_runtime_demo_pair_graph
+from ..control_core.models.task_types import (
+    HighLevelTaskRequest,
+    SchedulerStepResult,
+    TIP_FREE_GROWTH,
+    TIP_TURN_AUTONOMOUS,
+    TaskGraphSpec,
+)
+from ..control_core.orchestration.graph_factories import (
+    build_runtime_demo_pair_graph,
+    build_tip_free_growth_graph,
+)
 from ..control_core.orchestration.skill_registry import SkillRegistry, build_default_skill_registry
 from ..control_core.orchestration.skill_scheduler import SkillScheduler
 from ..control_core.orchestration.transition_policy_registry import (
     TransitionPolicyRegistry,
     build_default_transition_policy_registry,
 )
+from ..control_core.supervisor.operator_intent import normalize_operator_intent
+from ..control_core.supervisor.intent_router import route_operator_intent
+from ..control_core.supervisor.front_cooperation_plan import FrontCooperationPlan
+from ..control_core.supervisor.turn_task_supervisor import compile_turn_autonomous_request
 from ..control_core.topology.chain_topology import ChainTopology
 from ..control_core.topology.pair_registry import PairExtractorRegistry
 from ..control_core.controllers.adapters.legacy_extractors import (
@@ -51,6 +66,7 @@ class RuntimeStepResult:
     graph_id: str | None = None
     current_node_id: str | None = None
     active_skill_key: str | None = None
+    high_level_task_kind: str | None = None
     provider_status: dict[str, object] = field(default_factory=dict)
     dispatcher_status: dict[str, object] = field(default_factory=dict)
     diagnostics: dict[str, object] = field(default_factory=dict)
@@ -76,7 +92,9 @@ class RuntimeSession:
         self.observation_provider = observation_provider
         self.command_dispatcher = command_dispatcher
         self.session_name = session_name
-        self.topology = topology or ChainTopology(ordered_modules=["tip", "joint1", "joint2"])
+        self.topology = topology or ChainTopology(
+            ordered_modules=["tip", "joint1", "joint2", "joint3", "joint4", "joint5"]
+        )
         self.skill_registry = skill_registry or build_default_skill_registry(topology=self.topology)
         self.transition_policy_registry = (
             transition_policy_registry or build_default_transition_policy_registry()
@@ -101,6 +119,9 @@ class RuntimeSession:
         )
         self._started = False
         self.last_step_result: RuntimeStepResult | None = None
+        self.last_turn_plan: FrontCooperationPlan | None = None
+        self.last_high_level_task_request: HighLevelTaskRequest | None = None
+        self.last_operator_intent: OperatorIntent | None = None
 
     def start(self) -> None:
         """Start the provider/dispatcher pair and load the configured task graph."""
@@ -122,7 +143,107 @@ class RuntimeSession:
     def load_graph(self, graph_spec: TaskGraphSpec) -> None:
         """Load a new task graph into the session scheduler."""
         self.graph_spec = graph_spec
+        if graph_spec.metadata.get("graph_family") != "turn_autonomous":
+            self.last_turn_plan = None
         self.scheduler.load_graph(graph_spec)
+
+    def load_high_level_task(
+        self,
+        task_request: HighLevelTaskRequest,
+        *,
+        frame: RuntimeObservationFrame | None = None,
+    ) -> TaskGraphSpec:
+        """Compile and load one high-level request into the session scheduler."""
+        self.last_high_level_task_request = task_request
+        if task_request.task_kind == TIP_FREE_GROWTH:
+            self.last_turn_plan = None
+            graph_spec = build_tip_free_growth_graph(
+                graph_id=str(task_request.metadata.get("graph_id", "tip_free_growth")),
+                metadata={
+                    "runtime_main_path": True,
+                    "runtime_dispatch_mode": "scheduler_envelope",
+                    "runtime_input_mode": "runtime_frame",
+                    "operator_intent": str(task_request.metadata.get("operator_intent", "TIP_FREE_GROWTH")),
+                    "operator_intent_kind": str(
+                        task_request.metadata.get("operator_intent_kind", "TIP_FREE_GROWTH")
+                    ),
+                    "target_heading_delta_deg": task_request.metadata.get("target_heading_delta_deg"),
+                    **dict(task_request.metadata),
+                },
+            )
+            graph_spec.metadata.update(
+                {
+                    "operator_intent": str(task_request.metadata.get("operator_intent", "TIP_FREE_GROWTH")),
+                    "operator_intent_kind": str(
+                        task_request.metadata.get("operator_intent_kind", "TIP_FREE_GROWTH")
+                    ),
+                    "target_heading_delta_deg": task_request.metadata.get("target_heading_delta_deg"),
+                    **dict(task_request.metadata),
+                }
+            )
+            self.load_graph(graph_spec)
+            return graph_spec
+        if task_request.task_kind != TIP_TURN_AUTONOMOUS:
+            raise ValueError(f"runtime_session_high_level_task_unsupported:{task_request.task_kind}")
+
+        target_heading_delta_deg = _required_target_heading_delta(task_request.metadata)
+        resolved_frame = frame or self._frame_for_high_level_task()
+        if resolved_frame is None:
+            raise ValueError("runtime_session_turn_request_frame_unavailable")
+        graph_id = task_request.metadata.get("graph_id")
+        resolved_graph_id = None if graph_id is None else str(graph_id)
+        plan, graph_spec = compile_turn_autonomous_request(
+            resolved_frame,
+            target_heading_delta_deg=target_heading_delta_deg,
+            graph_id=resolved_graph_id,
+        )
+        graph_spec.metadata.update(
+            {
+                "operator_intent": str(task_request.metadata.get("operator_intent", "TIP_TURN")),
+                "operator_intent_kind": str(task_request.metadata.get("operator_intent_kind", "TIP_TURN")),
+                "target_heading_delta_deg": float(target_heading_delta_deg),
+                **dict(task_request.metadata),
+            }
+        )
+        self.last_turn_plan = plan
+        self.load_graph(graph_spec)
+        return graph_spec
+
+    def submit_intent(
+        self,
+        intent: OperatorIntent | Mapping[str, object] | str,
+        *,
+        frame: RuntimeObservationFrame | None = None,
+        metadata: Mapping[str, object] | None = None,
+        target_heading_delta_deg: float | None = None,
+    ) -> TaskGraphSpec:
+        """Route one operator intent into a high-level task and load it."""
+        task_request = route_operator_intent(
+            intent,
+            metadata=metadata,
+            target_heading_delta_deg=target_heading_delta_deg,
+        )
+        self.last_operator_intent = normalize_operator_intent(
+            intent,
+            target_heading_delta_deg=target_heading_delta_deg,
+        )
+        return self.load_high_level_task(task_request, frame=frame)
+
+    def set_operator_intent(
+        self,
+        intent: OperatorIntent | Mapping[str, object] | str,
+        *,
+        frame: RuntimeObservationFrame | None = None,
+        metadata: Mapping[str, object] | None = None,
+        target_heading_delta_deg: float | None = None,
+    ) -> TaskGraphSpec:
+        """Alias for `submit_intent(...)` used by higher-level callers."""
+        return self.submit_intent(
+            intent,
+            frame=frame,
+            metadata=metadata,
+            target_heading_delta_deg=target_heading_delta_deg,
+        )
 
     def reset(self, *, reset_backend: bool = True) -> dict[str, object]:
         """Reset the scheduler and any optional backend-owned caches."""
@@ -156,11 +277,32 @@ class RuntimeSession:
             "provider_kind": provider_kind,
             "dispatcher_kind": dispatcher_kind,
             "scheduler_input_source": "runtime_frame",
+            "operator_intent": graph_metadata.get("operator_intent"),
+            "operator_intent_kind": graph_metadata.get("operator_intent_kind"),
+            "high_level_task_kind": graph_metadata.get("high_level_task_kind"),
+            "target_heading_delta_deg": graph_metadata.get("target_heading_delta_deg"),
+            "tip_heading_target_deg": graph_metadata.get("tip_heading_target_deg"),
             "graph_id": scheduler_state.graph_id or (None if self.graph_spec is None else self.graph_spec.graph_id),
             "graph_metadata": graph_metadata,
             "current_node_id": scheduler_state.current_node_id,
             "previous_node_id": scheduler_state.previous_node_id,
             "is_finished": scheduler_state.is_finished,
+            "selected_joint_id": graph_metadata.get("selected_joint_id"),
+            "selected_joint_index": graph_metadata.get("selected_joint_index"),
+            "direct_front_cooperation": graph_metadata.get("direct_front_cooperation"),
+            "requires_recursive_transfer": graph_metadata.get("requires_recursive_transfer"),
+            "planner_mode": graph_metadata.get("planner_mode"),
+            "current_plan_node_kind": (
+                None if self.last_step_result is None else self.last_step_result.diagnostics.get("current_plan_node_kind")
+            ),
+            "current_active_pair": (
+                None if self.last_step_result is None else self.last_step_result.diagnostics.get("current_active_pair")
+            ),
+            "returning_to_tip_free_growth": (
+                None
+                if self.last_step_result is None
+                else self.last_step_result.diagnostics.get("returning_to_tip_free_growth")
+            ),
             "dispatch_target": dispatcher_kind,
             "dispatch_ready": bool(self.last_step_result and self.last_step_result.diagnostics.get("dispatch_ready")),
             "legacy_path_used": False,
@@ -169,6 +311,9 @@ class RuntimeSession:
             "topic_namespaces": topic_namespaces,
             "provider_status": provider_status,
             "dispatcher_status": dispatcher_status,
+            "last_turn_plan_diagnostics": (
+                None if self.last_turn_plan is None else dict(self.last_turn_plan.diagnostics)
+            ),
             "last_reason": None if self.last_step_result is None else self.last_step_result.reason,
         }
 
@@ -204,6 +349,9 @@ class RuntimeSession:
                     graph_id=scheduler_state.graph_id,
                     current_node_id=scheduler_state.current_node_id,
                     active_skill_key=scheduler_state.last_skill_key,
+                    high_level_task_kind=(
+                        None if self.graph_spec is None else self.graph_spec.metadata.get("high_level_task_kind")
+                    ),
                     provider_status=provider_status,
                     dispatcher_status=dispatcher_status,
                     diagnostics={
@@ -218,6 +366,22 @@ class RuntimeSession:
                         "graph_id": scheduler_state.graph_id,
                         "current_node_id": scheduler_state.current_node_id,
                         "active_skill_key": scheduler_state.last_skill_key,
+                        "operator_intent": (
+                            None if self.graph_spec is None else self.graph_spec.metadata.get("operator_intent")
+                        ),
+                        "operator_intent_kind": (
+                            None if self.graph_spec is None else self.graph_spec.metadata.get("operator_intent_kind")
+                        ),
+                        "high_level_task_kind": (
+                            None
+                            if self.graph_spec is None
+                            else self.graph_spec.metadata.get("high_level_task_kind")
+                        ),
+                        "target_heading_delta_deg": (
+                            None
+                            if self.graph_spec is None
+                            else self.graph_spec.metadata.get("target_heading_delta_deg")
+                        ),
                         "provider_status": provider_status,
                         "dispatcher_status": dispatcher_status,
                         "legacy_path_used": False,
@@ -286,6 +450,7 @@ class RuntimeSession:
             graph_id=scheduler_step_result.scheduler_state.graph_id,
             current_node_id=scheduler_step_result.scheduler_state.current_node_id,
             active_skill_key=active_skill_key,
+            high_level_task_kind=scheduler_step_result.diagnostics.get("high_level_task_kind"),
             provider_status=provider_status,
             dispatcher_status=dispatcher_status,
             diagnostics={
@@ -303,6 +468,11 @@ class RuntimeSession:
                 "graph_id": scheduler_step_result.scheduler_state.graph_id,
                 "current_node_id": scheduler_step_result.scheduler_state.current_node_id,
                 "active_skill_key": active_skill_key,
+                "operator_intent": scheduler_step_result.diagnostics.get("operator_intent"),
+                "operator_intent_kind": scheduler_step_result.diagnostics.get("operator_intent_kind"),
+                "high_level_task_kind": scheduler_step_result.diagnostics.get("high_level_task_kind"),
+                "target_heading_delta_deg": scheduler_step_result.diagnostics.get("target_heading_delta_deg"),
+                "tip_heading_target_deg": scheduler_step_result.diagnostics.get("tip_heading_target_deg"),
                 "state_builder_source": scheduler_step_result.diagnostics.get("state_builder_source"),
                 "legacy_path_used": False,
                 "self_contained": True,
@@ -318,6 +488,22 @@ class RuntimeSession:
                 "dispatch_reason": dispatch_result.reason,
                 "provider_status": provider_status,
                 "dispatcher_status": dispatcher_status,
+                "selected_joint_id": scheduler_step_result.diagnostics.get("selected_joint_id"),
+                "selected_joint_index": scheduler_step_result.diagnostics.get("selected_joint_index"),
+                "direct_front_cooperation": scheduler_step_result.diagnostics.get(
+                    "direct_front_cooperation"
+                ),
+                "requires_recursive_transfer": scheduler_step_result.diagnostics.get(
+                    "requires_recursive_transfer"
+                ),
+                "planner_mode": scheduler_step_result.diagnostics.get("planner_mode"),
+                "current_plan_node_kind": scheduler_step_result.diagnostics.get(
+                    "current_plan_node_kind"
+                ),
+                "current_active_pair": scheduler_step_result.diagnostics.get("current_active_pair"),
+                "returning_to_tip_free_growth": scheduler_step_result.diagnostics.get(
+                    "returning_to_tip_free_growth"
+                ),
             },
         )
         return self._store_result(result)
@@ -375,6 +561,19 @@ class RuntimeSession:
             frame_timestamp_ns=frame.timestamp_ns,
             topology_source=topology_source,
         )
+
+    def _frame_for_high_level_task(self) -> RuntimeObservationFrame | None:
+        """Resolve a runtime frame for high-level task compilation."""
+        if self._started:
+            return self.observation_provider.get_latest_frame()
+        self.observation_provider.start()
+        try:
+            warmed = self.observation_provider.warmup()
+            if warmed is not None:
+                return warmed
+            return self.observation_provider.get_latest_frame()
+        finally:
+            self.observation_provider.stop()
 
 
 def build_sim_runtime_session(
@@ -492,6 +691,17 @@ def _call_optional(target: object, method_name: str) -> None:
     method = getattr(target, method_name, None)
     if callable(method):
         method()
+
+
+def _required_target_heading_delta(metadata: Mapping[str, object]) -> float:
+    """Return the validated target-heading delta for one turn request."""
+    if "target_heading_delta_deg" not in metadata:
+        raise ValueError("runtime_session_turn_request_requires_target_heading_delta_deg")
+    value = metadata.get("target_heading_delta_deg")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("runtime_session_turn_request_requires_numeric_target_heading_delta_deg") from exc
 
 
 __all__ = [

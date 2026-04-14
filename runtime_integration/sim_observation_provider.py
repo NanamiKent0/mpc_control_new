@@ -361,6 +361,8 @@ def _resolved_pair_coupled(
     stored_value = getattr(state, pair_coupling_attr(active_module, passive_module))
     if distance_override is not None or orientation_override is not None:
         return bool(stored_value)
+    if active_module == "joint1" and passive_module == "tip":
+        return bool(float(distance_mm) <= 1.0)
     return bool(float(distance_mm) <= 1.0 and abs(float(orientation_error_deg)) <= 2.0)
 
 

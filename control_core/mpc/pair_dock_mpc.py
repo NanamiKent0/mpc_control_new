@@ -37,6 +37,8 @@ class PairDockMPC:
         dt: float,
         limits: Mapping[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
+        *,
+        enable_orientation: bool = True,
     ) -> PairDockMPCOutput:
         """Compute feed and rotate corrections toward the docking target."""
         del dt
@@ -72,7 +74,10 @@ class PairDockMPC:
             if feed_command >= feed_limit and feed_limit > 0.0:
                 notes.append("feed saturated")
 
-        if abs(orientation_tracking_error_deg) <= orientation_deadband_deg:
+        if not enable_orientation:
+            rotate_command = 0.0
+            notes.append("orientation control disabled")
+        elif abs(orientation_tracking_error_deg) <= orientation_deadband_deg:
             rotate_command = 0.0
             notes.append("orientation within deadband")
         else:

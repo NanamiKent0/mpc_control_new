@@ -4,6 +4,31 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+SUPPORTED_TURN_PLAN_JOINT_IDS = ("joint1", "joint2", "joint3", "joint4", "joint5")
+_JOINT_INDEX = {
+    joint_id: index for index, joint_id in enumerate(SUPPORTED_TURN_PLAN_JOINT_IDS, start=1)
+}
+
+
+def _require_supported_joint_id(joint_id: str) -> str:
+    resolved_joint_id = str(joint_id)
+    if resolved_joint_id not in _JOINT_INDEX:
+        raise ValueError(f"turn_plan_joint_unsupported:{resolved_joint_id}")
+    return resolved_joint_id
+
+
+def _require_adjacent_local_transfer(active_module: str, passive_module: str) -> tuple[str, str]:
+    resolved_active = _require_supported_joint_id(active_module)
+    resolved_passive = _require_supported_joint_id(passive_module)
+    if _JOINT_INDEX[resolved_active] < 2:
+        raise ValueError(f"turn_plan_local_transfer_active_unsupported:{resolved_active}")
+    if _JOINT_INDEX[resolved_active] != _JOINT_INDEX[resolved_passive] + 1:
+        raise ValueError(
+            "turn_plan_local_transfer_pair_invalid:"
+            f"{resolved_active}->{resolved_passive}"
+        )
+    return (resolved_active, resolved_passive)
+
 
 @dataclass(slots=True)
 class TurnPlanNode:
@@ -41,11 +66,15 @@ class LocalTransferNode(TurnPlanNode):
         *,
         metadata: dict[str, object] | None = None,
     ) -> None:
+        resolved_active, resolved_passive = _require_adjacent_local_transfer(
+            active_module,
+            passive_module,
+        )
         super().__init__(
-            node_id=f"local_transfer_{active_module}_to_{passive_module}",
+            node_id=f"local_transfer_{resolved_active}_to_{resolved_passive}",
             node_kind="local_transfer",
-            active_module=str(active_module),
-            passive_module=str(passive_module),
+            active_module=resolved_active,
+            passive_module=resolved_passive,
             relation_type="joint_joint",
             metadata=dict(metadata or {}),
         )
@@ -61,11 +90,17 @@ class FrontCooperateNode(TurnPlanNode):
         *,
         metadata: dict[str, object] | None = None,
     ) -> None:
+        resolved_active = _require_supported_joint_id(active_module)
+        if resolved_active != "joint1" or str(passive_module) != "tip":
+            raise ValueError(
+                "turn_plan_front_cooperate_pair_invalid:"
+                f"{resolved_active}->{passive_module}"
+            )
         super().__init__(
-            node_id=f"front_cooperate_{active_module}_to_{passive_module}",
+            node_id=f"front_cooperate_{resolved_active}_to_tip",
             node_kind="front_cooperate",
-            active_module=str(active_module),
-            passive_module=str(passive_module),
+            active_module=resolved_active,
+            passive_module="tip",
             relation_type="tip_joint",
             metadata=dict(metadata or {}),
         )
@@ -89,6 +124,7 @@ __all__ = [
     "FrontCooperateNode",
     "LocalTransferNode",
     "ReturnToFreeGrowthNode",
+    "SUPPORTED_TURN_PLAN_JOINT_IDS",
     "TipFreeGrowthNode",
     "TurnPlanNode",
 ]

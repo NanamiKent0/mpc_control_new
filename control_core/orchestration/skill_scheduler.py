@@ -119,6 +119,7 @@ class SkillScheduler:
         if self.task_graph is None:
             raise ValueError("skill_scheduler_graph_not_loaded")
         scheduler_input_source = self._scheduler_input_source(estimate)
+        graph_metadata = dict(self.task_graph.spec.metadata)
         if self.state.is_finished or self.state.current_node_id is None:
             return SchedulerStepResult(
                 scheduler_state=deepcopy(self.state),
@@ -153,6 +154,7 @@ class SkillScheduler:
                     "dispatch_ready": False,
                     "resolved_transition_policy_key": self.state.last_resolved_transition_policy_key,
                     "transition_policy_source": self.state.last_transition_policy_source,
+                    **self._workflow_metadata(graph_metadata, {}),
                 },
             )
 
@@ -270,12 +272,14 @@ class SkillScheduler:
         base_context = context or ExecutionContext()
         graph_metadata = {} if self.task_graph is None else dict(self.task_graph.spec.metadata)
         runtime_hints = self._contextual_execution_hints(graph_metadata, node.metadata)
+        workflow_metadata = self._workflow_metadata(graph_metadata, node.metadata)
         frame_timestamp_ns = (
             estimate.timestamp_ns if isinstance(estimate, RuntimeObservationFrame) else base_context.frame_timestamp_ns
         )
         return base_context.merged_metadata(
             {
                 **runtime_hints,
+                **workflow_metadata,
                 "graph_id": self.state.graph_id,
                 "graph_metadata": graph_metadata,
                 "node_id": node.node_id,
@@ -425,6 +429,7 @@ class SkillScheduler:
                 "transition_policy_source": policy_selection.source,
                 "transition_policy_registry_source": policy_selection.resolution.registry_source,
                 "transition_policy_error": error,
+                **self._workflow_metadata({}, execution_context.metadata),
             },
         )
 
@@ -500,6 +505,7 @@ class SkillScheduler:
             "geometry_observation_kind": result_diagnostics.get("geometry_observation_kind"),
             "geometry_source_schema": result_diagnostics.get("geometry_source_schema"),
             "selected_primitives": list(getattr(skill_result, "selected_primitives", [])) if skill_result else [],
+            **self._workflow_metadata({}, execution_context.metadata),
         }
 
     @staticmethod
@@ -534,3 +540,35 @@ class SkillScheduler:
             if key in node_metadata:
                 hints[key] = node_metadata[key]
         return hints
+
+    @staticmethod
+    def _workflow_metadata(
+        graph_metadata: dict[str, object],
+        node_metadata: dict[str, object],
+    ) -> dict[str, object]:
+        """Return flattened turn-workflow diagnostics shared across scheduler surfaces."""
+        keys = (
+            "operator_intent",
+            "operator_intent_kind",
+            "high_level_task_kind",
+            "target_heading_delta_deg",
+            "tip_heading_current_deg",
+            "tip_heading_target_deg",
+            "selected_joint_id",
+            "selected_joint_index",
+            "direct_front_cooperation",
+            "requires_recursive_transfer",
+            "planner_mode",
+            "current_plan_node_kind",
+            "current_active_pair",
+            "returning_to_tip_free_growth",
+            "plan_kind",
+        )
+        workflow: dict[str, object] = {}
+        for key in keys:
+            if key in graph_metadata:
+                workflow[key] = graph_metadata[key]
+        for key in keys:
+            if key in node_metadata:
+                workflow[key] = node_metadata[key]
+        return workflow

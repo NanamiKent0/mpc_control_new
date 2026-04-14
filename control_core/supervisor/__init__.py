@@ -1,7 +1,9 @@
 """Supervisor-facing selection helpers built on top of estimation outputs."""
 
 from .front_cooperation_plan import FRONT_COOPERATION_PLAN_KIND, FrontCooperationPlan
+from .intent_router import route_operator_intent
 from .joint_selection_result import JointSelectionResult
+from .operator_intent import normalize_operator_intent, tip_free_growth_intent, tip_turn_intent
 from .plan_nodes import (
     FrontCooperateNode,
     LocalTransferNode,
@@ -47,6 +49,10 @@ __all__ = [
     "build_recursive_transfer_plan",
     "can_front_cooperate_now",
     "find_first_idle_joint_from_joint1_to_joint5",
+    "normalize_operator_intent",
     "plan_turn_workflow",
+    "route_operator_intent",
     "select_front_joint_candidate",
+    "tip_free_growth_intent",
+    "tip_turn_intent",
 ]
