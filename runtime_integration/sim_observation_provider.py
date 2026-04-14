@@ -91,14 +91,20 @@ class SimObservationProvider:
         if not self._started:
             self.last_reason = "sim_provider_not_started"
             return None
+
         state = self.backend.snapshot_state()
         command = self.backend.snapshot_last_command()
+
         module_states = _module_states_from_sim_state(state)
         snapshot = compute_chain_snapshot(
             module_states,
             ordered_modules=SIM_MODULE_IDS,
         )
         timestamp_ns = int(round(float(state.sim_time_s) * 1_000_000_000.0))
+
+        tip_extension_mm = float(state.g)
+        tip_heading_deg = _resolved_tip_heading_deg(state)
+
         pairs = _pair_observations_from_state(
             state,
             snapshot=snapshot,
@@ -109,9 +115,12 @@ class SimObservationProvider:
             command,
             pair_observations=pairs,
             source_name=self.source_name,
+            tip_heading_deg=tip_heading_deg,
         )
+
         resolved_topology_hint = self.backend.build_topology_hint()
         resolved_topology_hint.update(self.topology_hint)
+
         self._latest_frame = RuntimeObservationFrame(
             timestamp_ns=timestamp_ns,
             module_observations=modules,
@@ -126,6 +135,12 @@ class SimObservationProvider:
                 "sim_seq": int(state.seq),
                 "ros2_gui_compatible": True,
                 "topic_namespaces": list(GUI_ROS2_TOPIC_NAMESPACES),
+
+                # 新增：给 runtime_session / GUI 直接读取
+                "tip_extension_mm": tip_extension_mm,
+                "current_tip_growth_mm": tip_extension_mm,
+                "tip_heading_deg": tip_heading_deg,
+                "current_tip_heading_deg": tip_heading_deg,
             },
         )
         self.last_reason = "sim_frame_served"
@@ -134,6 +149,16 @@ class SimObservationProvider:
     def snapshot_backend_state(self) -> dict[str, object]:
         """Return the latest backend snapshot for GUI or test consumers."""
         snapshot = self.backend.visualization_snapshot()
+        state = self.backend.snapshot_state()
+
+        tip_extension_mm = float(state.g)
+        tip_heading_deg = _resolved_tip_heading_deg(state)
+
+        snapshot["tip_extension_mm"] = tip_extension_mm
+        snapshot["current_tip_growth_mm"] = tip_extension_mm
+        snapshot["tip_heading_deg"] = tip_heading_deg
+        snapshot["current_tip_heading_deg"] = tip_heading_deg
+
         snapshot["gui_feedback_payloads"] = [payload.data for payload in self.gui_ros2_feedback_payloads()]
         return snapshot
 
@@ -175,7 +200,6 @@ class SimObservationProvider:
             )
         return feedbacks
 
-
 def _module_states_from_sim_state(state: SimState) -> dict[str, object]:
     """Build `ModuleState` inputs used by the unified kinematics layer."""
     module_states = {
@@ -198,6 +222,24 @@ def _module_states_from_sim_state(state: SimState) -> dict[str, object]:
         )
     return module_states
 
+def _resolved_tip_heading_deg(state: SimState) -> float:
+    """
+    Return one simplified planar tip heading proxy.
+
+    Current sim convention:
+        tip heading ~= joint1.rotate_deg + joint1.bend_deg
+
+    This is not a full 3D heading representation. It is only the current
+    planar heading proxy used by the sim/runtime GUI path.
+    """
+    joint1_orientation_attr = module_orientation_attr("joint1")
+    joint1_bend_attr = module_bend_attr("joint1")
+    assert joint1_orientation_attr is not None
+    assert joint1_bend_attr is not None
+
+    rotate_deg = float(getattr(state, joint1_orientation_attr))
+    bend_deg = float(getattr(state, joint1_bend_attr))
+    return rotate_deg + bend_deg
 
 def _module_observations_from_state(
     state: SimState,
@@ -205,16 +247,24 @@ def _module_observations_from_state(
     *,
     pair_observations: dict[str, PairObservation],
     source_name: str,
+    tip_heading_deg: float,
 ) -> dict[str, ModuleObservation]:
     """Build module observations for every simulated namespace."""
     modules: dict[str, ModuleObservation] = {
         "tip": ModuleObservation(
             module_id="tip",
             module_type="tip",
-            dofs={"growth_mm": float(state.g)},
+            dofs={
+                "growth_mm": float(state.g),
+                "heading_deg": float(tip_heading_deg),
+            },
             velocities={"growth_mm_s": float(command.tip_growth_mm_s)},
             attach_state={"joint1": _pair_coupled(pair_observations, "joint1", "tip")},
-            diagnostics=_module_diagnostics(state.seq),
+            diagnostics={
+                **_module_diagnostics(state.seq),
+                "tip_extension_mm": float(state.g),
+                "tip_heading_deg": float(tip_heading_deg),
+            },
             source_name=source_name,
         )
     }

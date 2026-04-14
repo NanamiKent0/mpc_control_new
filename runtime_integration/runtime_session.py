@@ -209,6 +209,34 @@ class RuntimeSession:
         self.load_graph(graph_spec)
         return graph_spec
 
+    def _extract_tip_motion_status(
+        self,
+        latest_frame: RuntimeObservationFrame | None,
+        provider_status: dict[str, object] | None,
+    ) -> tuple[float, float]:
+        """
+        Return (tip_extension_mm, tip_heading_deg).
+        Priority:
+        1) latest_frame.metadata
+        2) provider_status["latest_backend_state"]
+        3) fallback zeros
+        """
+        tip_extension_mm = 0.0
+        tip_heading_deg = 0.0
+
+        if latest_frame is not None:
+            metadata = dict(latest_frame.metadata or {})
+            tip_extension_mm = float(metadata.get("tip_extension_mm", tip_extension_mm) or tip_extension_mm)
+            tip_heading_deg = float(metadata.get("tip_heading_deg", tip_heading_deg) or tip_heading_deg)
+
+        if provider_status:
+            backend_state = provider_status.get("latest_backend_state")
+            if isinstance(backend_state, dict):
+                tip_extension_mm = float(backend_state.get("tip_extension_mm", tip_extension_mm) or tip_extension_mm)
+                tip_heading_deg = float(backend_state.get("tip_heading_deg", tip_heading_deg) or tip_heading_deg)
+
+        return tip_extension_mm, tip_heading_deg
+
     def submit_intent(
         self,
         intent: OperatorIntent | Mapping[str, object] | str,
@@ -261,60 +289,33 @@ class RuntimeSession:
 
     def snapshot_status(self) -> dict[str, object]:
         """Return a structured snapshot for GUI, demos, and tests."""
-        provider_kind = _provider_kind(self.observation_provider)
-        dispatcher_kind = _dispatcher_kind(self.command_dispatcher)
-        provider_status = _component_runtime_diagnostics(self.observation_provider)
-        dispatcher_status = _component_runtime_diagnostics(self.command_dispatcher)
-        scheduler_state = self.scheduler.state
-        graph_metadata = {} if self.graph_spec is None else dict(self.graph_spec.metadata)
-        topic_namespaces = _topic_namespaces(provider_status, dispatcher_status)
-        gui_ros2_compatible = bool(
-            provider_status.get("gui_ros2_compatible") or dispatcher_status.get("gui_ros2_compatible")
+        provider_status = self.provider.status()
+        dispatcher_status = self.dispatcher.status()
+        latest_frame = self.provider.get_latest_frame()
+
+        tip_extension_mm, tip_heading_deg = self._extract_tip_motion_status(
+            latest_frame=latest_frame,
+            provider_status=provider_status if isinstance(provider_status, dict) else None,
         )
+
         return {
-            "session_name": self.session_name,
-            "started": self._started,
-            "provider_kind": provider_kind,
-            "dispatcher_kind": dispatcher_kind,
-            "scheduler_input_source": "runtime_frame",
-            "operator_intent": graph_metadata.get("operator_intent"),
-            "operator_intent_kind": graph_metadata.get("operator_intent_kind"),
-            "high_level_task_kind": graph_metadata.get("high_level_task_kind"),
-            "target_heading_delta_deg": graph_metadata.get("target_heading_delta_deg"),
-            "tip_heading_target_deg": graph_metadata.get("tip_heading_target_deg"),
-            "graph_id": scheduler_state.graph_id or (None if self.graph_spec is None else self.graph_spec.graph_id),
-            "graph_metadata": graph_metadata,
-            "current_node_id": scheduler_state.current_node_id,
-            "previous_node_id": scheduler_state.previous_node_id,
-            "is_finished": scheduler_state.is_finished,
-            "selected_joint_id": graph_metadata.get("selected_joint_id"),
-            "selected_joint_index": graph_metadata.get("selected_joint_index"),
-            "direct_front_cooperation": graph_metadata.get("direct_front_cooperation"),
-            "requires_recursive_transfer": graph_metadata.get("requires_recursive_transfer"),
-            "planner_mode": graph_metadata.get("planner_mode"),
-            "current_plan_node_kind": (
-                None if self.last_step_result is None else self.last_step_result.diagnostics.get("current_plan_node_kind")
-            ),
-            "current_active_pair": (
-                None if self.last_step_result is None else self.last_step_result.diagnostics.get("current_active_pair")
-            ),
-            "returning_to_tip_free_growth": (
-                None
-                if self.last_step_result is None
-                else self.last_step_result.diagnostics.get("returning_to_tip_free_growth")
-            ),
-            "dispatch_target": dispatcher_kind,
-            "dispatch_ready": bool(self.last_step_result and self.last_step_result.diagnostics.get("dispatch_ready")),
-            "legacy_path_used": False,
-            "self_contained": True,
-            "gui_ros2_compatible": gui_ros2_compatible,
-            "topic_namespaces": topic_namespaces,
+            "mode": self.mode,
+            "graph_id": self.graph_spec.graph_id if self.graph_spec is not None else None,
+            "scheduler_state": self.scheduler.state.as_dict(),
             "provider_status": provider_status,
             "dispatcher_status": dispatcher_status,
-            "last_turn_plan_diagnostics": (
-                None if self.last_turn_plan is None else dict(self.last_turn_plan.diagnostics)
-            ),
-            "last_reason": None if self.last_step_result is None else self.last_step_result.reason,
+            "loaded_task_kind": self._loaded_high_level_task.kind if self._loaded_high_level_task is not None else None,
+            "loaded_task_metadata": dict(self._loaded_high_level_task.metadata)
+            if self._loaded_high_level_task is not None
+            else {},
+            "latest_step": self._latest_step_result.to_dict() if self._latest_step_result is not None else None,
+            "last_turn_plan": dict(self._last_turn_plan) if self._last_turn_plan is not None else None,
+
+            # 新增：给 GUI 直接消费的扁平字段
+            "tip_extension_mm": tip_extension_mm,
+            "current_tip_growth_mm": tip_extension_mm,
+            "tip_heading_deg": tip_heading_deg,
+            "current_tip_heading_deg": tip_heading_deg,
         }
 
     def run_once(self, *, context: ExecutionContext | None = None) -> RuntimeStepResult:
