@@ -100,25 +100,15 @@ class SimRuntimeBackend:
             },
         }
     
-    def _estimate_tip_heading_deg(self, state: SimState) -> float:
-        """
-        Current simplified planar tip heading proxy.
-
-        For the present 2D sim, use joint1 front direction as the tip heading proxy:
-            tip_heading ~= joint1.orientation_deg + joint1.bend_deg
-        """
-        joint1 = state.module_states.get("joint1")
-        if joint1 is None:
-            return 0.0
-        return float(joint1.orientation_deg + joint1.bend_deg)
+    def _extract_tip_heading_deg(self, state) -> float:
+        if hasattr(state, "tip_heading_deg"):
+            return float(state.tip_heading_deg)
+        if hasattr(state, "heading_deg"):
+            return float(state.heading_deg)
+        return 0.0
 
 
-    def _extract_tip_extension_mm(self, state: SimState) -> float:
-        tip_state = state.module_states.get("tip")
-        if tip_state is not None:
-            g_mm = getattr(tip_state, "g_mm", None)
-            if g_mm is not None:
-                return float(g_mm)
+    def _extract_tip_extension_mm(self, state) -> float:
         return float(getattr(state, "g", 0.0))
 
     def apply_command(
@@ -191,14 +181,11 @@ class SimRuntimeBackend:
         return self.snapshot_state()
 
     def visualization_snapshot(self) -> dict[str, object]:
-        state = self.snapshot()
-        snapshot = state.as_dict()
-        snapshot["last_skill_key"] = self._last_skill_key
-        snapshot["last_pair_key"] = self._last_pair_key
-        snapshot["last_command_metadata"] = dict(self._last_command_metadata)
-        snapshot["tip_extension_mm"] = self._extract_tip_extension_mm(state)
-        snapshot["tip_heading_deg"] = self._estimate_tip_heading_deg(state)
-        return snapshot
+        state = self.snapshot_state()
+        visualization = state.to_dict()
+        visualization["tip_extension_mm"] = self._extract_tip_extension_mm(state)
+        visualization["tip_heading_deg"] = self._extract_tip_heading_deg(state)
+        return visualization
 
     def _advance_pair_geometry(
         self,
