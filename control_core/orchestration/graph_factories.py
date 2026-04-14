@@ -266,6 +266,8 @@ def build_runtime_demo_pair_graph(
         "runtime_main_path": True,
         "runtime_input_mode": "runtime_frame",
         "runtime_dispatch_mode": "scheduler_envelope",
+        "runtime_gui_entry": "runtime_integration/gui/gui_ros2.py",
+        "runtime_gui_semantic": "ros2_motor_topics",
         "runtime_supported_pairs": [
             {"active_module": "joint1", "passive_module": "tip", "relation_type": "tip_joint"},
             {"active_module": "joint2", "passive_module": "joint1", "relation_type": "joint_joint"},
@@ -298,6 +300,7 @@ def build_runtime_demo_pair_graph(
     pair_label = f"{active_module}->{passive_module}"
     graph.metadata.update(
         {
+            "graph_label": f"Runtime Demo {pair_label}",
             "graph_name": f"Runtime Demo {pair_label}",
             "graph_display_name": f"Runtime Demo {pair_label}",
             "requested_runtime_pair": {

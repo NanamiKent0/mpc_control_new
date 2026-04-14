@@ -14,11 +14,13 @@ if str(PROJECT_ROOT) not in sys.path:
 from mpc_control_new.control_core.models.skill_types import SkillSpec
 from mpc_control_new.control_core.topology.pair_registry import PairDescriptor, PairExtractorRegistry
 from mpc_control_new.control_core.topology.relation_state import RelationState
-from mpc_control_new.controllers.adapters.legacy_extractors import (
+from mpc_control_new.control_core.controllers.adapters.legacy_extractors import (
     build_default_pair_extractor_registry,
     extract_relation_state_via_registry,
 )
-from mpc_control_new.controllers.adapters.skill_controller_adapter import SkillControllerAdapter
+from mpc_control_new.control_core.controllers.adapters.skill_controller_adapter import (
+    SkillControllerAdapter,
+)
 
 
 def _build_estimate() -> SimpleNamespace:

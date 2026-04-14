@@ -17,7 +17,9 @@ from mpc_control_new.control_core.orchestration.graph_factories import build_pai
 from mpc_control_new.control_core.orchestration.skill_scheduler import SkillScheduler
 from mpc_control_new.control_core.skills.coarse_approach import CoarseApproachSkill
 from mpc_control_new.control_core.topology.chain_topology import ChainTopology
-from mpc_control_new.controllers.adapters.skill_controller_adapter import SkillControllerAdapter
+from mpc_control_new.control_core.controllers.adapters.skill_controller_adapter import (
+    SkillControllerAdapter,
+)
 
 
 def _estimate() -> SimpleNamespace:

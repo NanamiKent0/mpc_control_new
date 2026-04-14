@@ -8,7 +8,11 @@ from ..control_core.models.geometry_observation import GeometryObservation
 from ..control_core.models.module_state import ModuleState, make_joint_module_state, make_tip_module_state
 from ..control_core.topology.chain_topology import ChainTopology
 from ..control_core.topology.relation_state import DiagnosticValue, RelationState, RelationType
-from ..controllers.adapters.legacy_extractors import infer_module_type, infer_relation_type, is_joint_module
+from ..control_core.controllers.adapters.legacy_extractors import (
+    infer_module_type,
+    infer_relation_type,
+    is_joint_module,
+)
 from .observation_types import ModuleObservation, PairObservation, RuntimeObservationFrame, pair_key
 
 RUNTIME_STATE_BUILDER_SOURCE = "runtime_state_builder"

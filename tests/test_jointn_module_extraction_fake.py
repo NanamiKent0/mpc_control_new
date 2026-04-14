@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from mpc_control_new.controllers.adapters.legacy_extractors import (
+from mpc_control_new.control_core.controllers.adapters.legacy_extractors import (
     extract_module_state,
     is_joint_module,
     parse_joint_index,

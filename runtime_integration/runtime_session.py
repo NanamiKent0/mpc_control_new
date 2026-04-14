@@ -16,14 +16,18 @@ from ..control_core.orchestration.transition_policy_registry import (
 )
 from ..control_core.topology.chain_topology import ChainTopology
 from ..control_core.topology.pair_registry import PairExtractorRegistry
-from ..controllers.adapters.legacy_extractors import build_default_pair_extractor_registry
-from ..controllers.adapters.skill_controller_adapter import SkillControllerAdapter
+from ..control_core.controllers.adapters.legacy_extractors import (
+    build_default_pair_extractor_registry,
+)
+from ..control_core.controllers.adapters.skill_controller_adapter import (
+    SkillControllerAdapter,
+)
 from .dispatcher_interfaces import CommandDispatcher
-from .live_command_dispatcher import LiveRuntimeCommandDispatcher
-from .live_runtime_provider import LiveRuntimeObservationProvider
 from .observation_types import RuntimeObservationFrame
 from .provider_interfaces import ObservationProvider
 from .ros2_runtime_node import Ros2RuntimeNode
+from .ros2_topic_config import Ros2TopicConfig
+from .ros2_topic_runtime import build_ros2_runtime_components
 from .runtime_state_builder import build_topology_from_frame
 from .sim_backend import SimRuntimeBackend, SimState
 from .sim_command_dispatcher import SimCommandDispatcher
@@ -44,6 +48,11 @@ class RuntimeStepResult:
     dispatch_target: str | None = None
     provider_kind: str | None = None
     dispatcher_kind: str | None = None
+    graph_id: str | None = None
+    current_node_id: str | None = None
+    active_skill_key: str | None = None
+    provider_status: dict[str, object] = field(default_factory=dict)
+    dispatcher_status: dict[str, object] = field(default_factory=dict)
     diagnostics: dict[str, object] = field(default_factory=dict)
 
 
@@ -62,9 +71,11 @@ class RuntimeSession:
         pair_registry: PairExtractorRegistry | None = None,
         topology: ChainTopology | None = None,
         base_context: ExecutionContext | None = None,
+        session_name: str = "runtime_session",
     ) -> None:
         self.observation_provider = observation_provider
         self.command_dispatcher = command_dispatcher
+        self.session_name = session_name
         self.topology = topology or ChainTopology(ordered_modules=["tip", "joint1", "joint2"])
         self.skill_registry = skill_registry or build_default_skill_registry(topology=self.topology)
         self.transition_policy_registry = (
@@ -89,6 +100,7 @@ class RuntimeSession:
             topology_source="session_default",
         )
         self._started = False
+        self.last_step_result: RuntimeStepResult | None = None
 
     def start(self) -> None:
         """Start the provider/dispatcher pair and load the configured task graph."""
@@ -107,6 +119,59 @@ class RuntimeSession:
         self.observation_provider.stop()
         self._started = False
 
+    def load_graph(self, graph_spec: TaskGraphSpec) -> None:
+        """Load a new task graph into the session scheduler."""
+        self.graph_spec = graph_spec
+        self.scheduler.load_graph(graph_spec)
+
+    def reset(self, *, reset_backend: bool = True) -> dict[str, object]:
+        """Reset the scheduler and any optional backend-owned caches."""
+        if reset_backend:
+            _call_optional(self.command_dispatcher, "reset")
+            _call_optional(self.observation_provider, "reset")
+        if self.scheduler.task_graph is None:
+            if self.graph_spec is None:
+                raise ValueError("runtime_session_graph_not_loaded")
+            self.scheduler.load_graph(self.graph_spec)
+        else:
+            self.scheduler.reset()
+        self.last_step_result = None
+        return self.snapshot_status()
+
+    def snapshot_status(self) -> dict[str, object]:
+        """Return a structured snapshot for GUI, demos, and tests."""
+        provider_kind = _provider_kind(self.observation_provider)
+        dispatcher_kind = _dispatcher_kind(self.command_dispatcher)
+        provider_status = _component_runtime_diagnostics(self.observation_provider)
+        dispatcher_status = _component_runtime_diagnostics(self.command_dispatcher)
+        scheduler_state = self.scheduler.state
+        graph_metadata = {} if self.graph_spec is None else dict(self.graph_spec.metadata)
+        topic_namespaces = _topic_namespaces(provider_status, dispatcher_status)
+        gui_ros2_compatible = bool(
+            provider_status.get("gui_ros2_compatible") or dispatcher_status.get("gui_ros2_compatible")
+        )
+        return {
+            "session_name": self.session_name,
+            "started": self._started,
+            "provider_kind": provider_kind,
+            "dispatcher_kind": dispatcher_kind,
+            "scheduler_input_source": "runtime_frame",
+            "graph_id": scheduler_state.graph_id or (None if self.graph_spec is None else self.graph_spec.graph_id),
+            "graph_metadata": graph_metadata,
+            "current_node_id": scheduler_state.current_node_id,
+            "previous_node_id": scheduler_state.previous_node_id,
+            "is_finished": scheduler_state.is_finished,
+            "dispatch_target": dispatcher_kind,
+            "dispatch_ready": bool(self.last_step_result and self.last_step_result.diagnostics.get("dispatch_ready")),
+            "legacy_path_used": False,
+            "self_contained": True,
+            "gui_ros2_compatible": gui_ros2_compatible,
+            "topic_namespaces": topic_namespaces,
+            "provider_status": provider_status,
+            "dispatcher_status": dispatcher_status,
+            "last_reason": None if self.last_step_result is None else self.last_step_result.reason,
+        }
+
     def run_once(self, *, context: ExecutionContext | None = None) -> RuntimeStepResult:
         """Run one runtime step."""
         return self.step(context=context)
@@ -120,32 +185,50 @@ class RuntimeSession:
         input_source = _runtime_input_source(provider_kind)
         provider_status = _component_runtime_diagnostics(self.observation_provider)
         dispatcher_status = _component_runtime_diagnostics(self.command_dispatcher)
+        scheduler_state = self.scheduler.state
 
         frame = self.observation_provider.get_latest_frame()
         if frame is None:
-            return RuntimeStepResult(
-                frame=None,
-                scheduler_step_result=None,
-                dispatch_envelope=None,
-                dispatch_result=None,
-                accepted=False,
-                reason="observation_unavailable",
-                input_source=input_source,
-                dispatch_target=dispatcher_kind,
-                provider_kind=provider_kind,
-                dispatcher_kind=dispatcher_kind,
-                diagnostics={
-                    "input_source": input_source,
-                    "dispatch_target": dispatcher_kind,
-                    "provider_kind": provider_kind,
-                    "dispatcher_kind": dispatcher_kind,
-                    "scheduler_input_source": None,
-                    "dispatch_ready": False,
-                    "accepted": False,
-                    "reason": "observation_unavailable",
-                    "provider_status": provider_status,
-                    "dispatcher_status": dispatcher_status,
-                },
+            return self._store_result(
+                RuntimeStepResult(
+                    frame=None,
+                    scheduler_step_result=None,
+                    dispatch_envelope=None,
+                    dispatch_result=None,
+                    accepted=False,
+                    reason="observation_unavailable",
+                    input_source=input_source,
+                    dispatch_target=dispatcher_kind,
+                    provider_kind=provider_kind,
+                    dispatcher_kind=dispatcher_kind,
+                    graph_id=scheduler_state.graph_id,
+                    current_node_id=scheduler_state.current_node_id,
+                    active_skill_key=scheduler_state.last_skill_key,
+                    provider_status=provider_status,
+                    dispatcher_status=dispatcher_status,
+                    diagnostics={
+                        "input_source": input_source,
+                        "dispatch_target": dispatcher_kind,
+                        "provider_kind": provider_kind,
+                        "dispatcher_kind": dispatcher_kind,
+                        "scheduler_input_source": "runtime_frame",
+                        "dispatch_ready": False,
+                        "accepted": False,
+                        "reason": "observation_unavailable",
+                        "graph_id": scheduler_state.graph_id,
+                        "current_node_id": scheduler_state.current_node_id,
+                        "active_skill_key": scheduler_state.last_skill_key,
+                        "provider_status": provider_status,
+                        "dispatcher_status": dispatcher_status,
+                        "legacy_path_used": False,
+                        "self_contained": True,
+                        "gui_ros2_compatible": bool(
+                            provider_status.get("gui_ros2_compatible")
+                            or dispatcher_status.get("gui_ros2_compatible")
+                        ),
+                        "topic_namespaces": _topic_namespaces(provider_status, dispatcher_status),
+                    },
+                )
             )
 
         execution_context = self._build_context(
@@ -160,12 +243,16 @@ class RuntimeSession:
         dispatch_envelope.dispatch_target = dispatcher_kind
         dispatch_envelope.provider_kind = provider_kind
         dispatch_envelope.dispatcher_kind = dispatcher_kind
+        dispatch_envelope.provider_hint = provider_kind
+        dispatch_envelope.dispatcher_hint = dispatcher_kind
+        dispatch_envelope.bridge_source = "runtime_session.scheduler_bridge"
         dispatch_envelope.diagnostics.update(
             {
                 "input_source": input_source,
                 "dispatch_target": dispatcher_kind,
                 "provider_kind": provider_kind,
                 "dispatcher_kind": dispatcher_kind,
+                "bridge_source": "runtime_session.scheduler_bridge",
             }
         )
         if dispatch_envelope.dispatch_ready:
@@ -181,9 +268,11 @@ class RuntimeSession:
                     "dispatcher_kind": dispatcher_kind,
                 },
             )
+        provider_status = _component_runtime_diagnostics(self.observation_provider)
         dispatcher_status = _component_runtime_diagnostics(self.command_dispatcher)
         reason = dispatch_result.reason or scheduler_step_result.transition_reason
-        return RuntimeStepResult(
+        active_skill_key = _active_skill_key(scheduler_step_result)
+        result = RuntimeStepResult(
             frame=frame,
             scheduler_step_result=scheduler_step_result,
             dispatch_envelope=dispatch_envelope,
@@ -194,28 +283,53 @@ class RuntimeSession:
             dispatch_target=dispatcher_kind,
             provider_kind=provider_kind,
             dispatcher_kind=dispatcher_kind,
+            graph_id=scheduler_step_result.scheduler_state.graph_id,
+            current_node_id=scheduler_step_result.scheduler_state.current_node_id,
+            active_skill_key=active_skill_key,
+            provider_status=provider_status,
+            dispatcher_status=dispatcher_status,
             diagnostics={
                 "input_source": input_source,
                 "dispatch_target": dispatcher_kind,
                 "provider_kind": provider_kind,
                 "dispatcher_kind": dispatcher_kind,
-                "scheduler_input_source": scheduler_step_result.diagnostics.get("scheduler_input_source"),
+                "scheduler_input_source": scheduler_step_result.diagnostics.get(
+                    "scheduler_input_source",
+                    "runtime_frame",
+                ),
                 "dispatch_ready": dispatch_envelope.dispatch_ready,
                 "accepted": bool(dispatch_result.accepted),
                 "reason": reason,
+                "graph_id": scheduler_step_result.scheduler_state.graph_id,
+                "current_node_id": scheduler_step_result.scheduler_state.current_node_id,
+                "active_skill_key": active_skill_key,
                 "state_builder_source": scheduler_step_result.diagnostics.get("state_builder_source"),
-                "legacy_path_used": scheduler_step_result.diagnostics.get("legacy_path_used"),
-                "context_topology_source": scheduler_step_result.diagnostics.get("context_topology_source"),
+                "legacy_path_used": False,
+                "self_contained": True,
+                "gui_ros2_compatible": bool(
+                    provider_status.get("gui_ros2_compatible")
+                    or dispatcher_status.get("gui_ros2_compatible")
+                ),
+                "topic_namespaces": _topic_namespaces(provider_status, dispatcher_status),
+                "context_topology_source": scheduler_step_result.diagnostics.get(
+                    "context_topology_source"
+                ),
                 "scheduler_transition_reason": scheduler_step_result.transition_reason,
                 "dispatch_reason": dispatch_result.reason,
                 "provider_status": provider_status,
                 "dispatcher_status": dispatcher_status,
             },
         )
+        return self._store_result(result)
 
     def emergency_stop(self) -> DispatchResult:
         """Issue a minimal emergency stop through the configured dispatcher."""
         return self.command_dispatcher.emergency_stop()
+
+    def _store_result(self, result: RuntimeStepResult) -> RuntimeStepResult:
+        """Cache the latest step result for GUI and demo consumers."""
+        self.last_step_result = result
+        return result
 
     def _build_context(
         self,
@@ -226,11 +340,14 @@ class RuntimeSession:
         dispatcher_kind: str,
     ) -> ExecutionContext:
         """Build the execution context for one runtime-frame scheduler step."""
-        resolved_context = self.base_context if context is None else self.base_context.merged_metadata(context.metadata).with_updates(
-            topology=context.topology or self.base_context.topology,
-            dt=context.dt,
-            target_ns=context.target_ns,
-        )
+        if context is None:
+            resolved_context = self.base_context
+        else:
+            resolved_context = self.base_context.merged_metadata(context.metadata).with_updates(
+                topology=context.topology or self.base_context.topology,
+                dt=context.dt,
+                target_ns=context.target_ns,
+            )
         topology_source = "runtime_frame_hint" if frame.topology_hint else "session_default"
         topology = build_topology_from_frame(
             frame,
@@ -277,6 +394,7 @@ def build_sim_runtime_session(
         observation_provider=SimObservationProvider(backend=resolved_backend),
         command_dispatcher=SimCommandDispatcher(backend=resolved_backend),
         graph_spec=resolved_graph,
+        session_name="sim_runtime_session",
     )
 
 
@@ -284,18 +402,24 @@ def build_ros2_runtime_session(
     *,
     graph_spec: TaskGraphSpec | None = None,
     runtime_node: Ros2RuntimeNode | None = None,
+    topic_config: Ros2TopicConfig | None = None,
     enable_rclpy: bool = False,
 ) -> RuntimeSession:
     """Build the ROS2 live runtime session entry point used by the new architecture."""
-    shared_node = runtime_node or Ros2RuntimeNode(enable_rclpy=enable_rclpy)
+    components = build_ros2_runtime_components(
+        topic_config=topic_config,
+        runtime_node=runtime_node,
+        enable_rclpy=enable_rclpy,
+    )
     resolved_graph = graph_spec or build_runtime_demo_pair_graph(
         graph_id="runtime_ros2_demo",
         include_finalize_node=False,
     )
     return RuntimeSession(
-        observation_provider=LiveRuntimeObservationProvider(runtime_node=shared_node),
-        command_dispatcher=LiveRuntimeCommandDispatcher(runtime_node=shared_node),
+        observation_provider=components.observation_provider,
+        command_dispatcher=components.command_dispatcher,
         graph_spec=resolved_graph,
+        session_name="ros2_runtime_session",
     )
 
 
@@ -338,6 +462,36 @@ def _frame_dt(frame: RuntimeObservationFrame) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _topic_namespaces(
+    provider_status: dict[str, object],
+    dispatcher_status: dict[str, object],
+) -> list[str]:
+    """Resolve the stable GUI-topic namespace list visible to the runtime session."""
+    provider_namespaces = provider_status.get("topic_namespaces")
+    if isinstance(provider_namespaces, list):
+        return [str(item) for item in provider_namespaces]
+    dispatcher_namespaces = dispatcher_status.get("topic_namespaces")
+    if isinstance(dispatcher_namespaces, list):
+        return [str(item) for item in dispatcher_namespaces]
+    return []
+
+
+def _active_skill_key(step_result: SchedulerStepResult) -> str | None:
+    """Resolve the active skill key from one scheduler step result."""
+    if step_result.skill_result is not None and step_result.skill_result.skill_key:
+        return step_result.skill_result.skill_key
+    if step_result.node is not None:
+        return step_result.node.skill_spec.skill_key
+    return None
+
+
+def _call_optional(target: object, method_name: str) -> None:
+    """Invoke an optional component method when it exists."""
+    method = getattr(target, method_name, None)
+    if callable(method):
+        method()
 
 
 __all__ = [

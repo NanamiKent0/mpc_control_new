@@ -5,15 +5,32 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ...control_core.models.runtime_bridge_types import SchedulerDispatchEnvelope
-from .types import SIM_MODULE_IDS, SimCommand, SimState
+from .types import (
+    SIM_ADJACENT_PAIRS,
+    SIM_JOINT_IDS,
+    SIM_MODULE_IDS,
+    SimCommand,
+    SimState,
+    command_bend_attr,
+    command_linear_attr,
+    command_rotate_attr,
+    module_bend_attr,
+    module_orientation_attr,
+    module_position_attr,
+    pair_coupling_attr,
+    pair_distance_attr,
+    pair_key,
+    pair_orientation_attr,
+)
 
-SIM_BACKEND_VERSION = "phase8.self_contained.v1"
+SIM_BACKEND_VERSION = "phase8.self_contained.v2"
 
 
 @dataclass(slots=True)
 class SimRuntimeBackend:
     """Minimal in-process sim backend owned entirely by `mpc_control_new`."""
 
+    initial_state: SimState
     state: SimState
     dt: float = 0.1
     last_command: SimCommand = field(default_factory=SimCommand)
@@ -21,7 +38,8 @@ class SimRuntimeBackend:
     backend_version: str = SIM_BACKEND_VERSION
 
     def __init__(self, state: SimState | None = None, *, dt: float = 0.1) -> None:
-        self.state = (state or SimState()).copy()
+        self.initial_state = (state or SimState()).copy()
+        self.state = self.initial_state.copy()
         self.dt = float(dt)
         self.last_command = SimCommand()
         self.last_envelope = None
@@ -41,6 +59,14 @@ class SimRuntimeBackend:
 
     def diagnostics(self) -> dict[str, object]:
         """Return stable backend diagnostics for providers, dispatchers, and tests."""
+        last_skill_key = None
+        last_pair = None
+        if self.last_envelope is not None and self.last_envelope.scheduled_command is not None:
+            last_skill_key = self.last_envelope.scheduled_command.skill_key
+            last_pair = (
+                f"{self.last_envelope.scheduled_command.active_module}"
+                f"->{self.last_envelope.scheduled_command.passive_module}"
+            )
         return {
             "provider_source": "self_contained_sim_backend",
             "dispatch_target": "sim",
@@ -49,18 +75,28 @@ class SimRuntimeBackend:
             "sim_dt": float(self.dt),
             "sim_seq": float(self.state.seq),
             "sim_time_s": float(self.state.sim_time_s),
+            "coupled_pairs": {
+                pair_key(active_module, passive_module): bool(
+                    getattr(self.state, pair_coupling_attr(active_module, passive_module))
+                )
+                for active_module, passive_module in SIM_ADJACENT_PAIRS
+            },
+            "last_skill_key": last_skill_key,
+            "last_pair": last_pair,
         }
 
     def build_topology_hint(self) -> dict[str, object]:
-        """Build a small topology hint sufficient for runtime session smoke coverage."""
+        """Build a topology hint aligned with the six-module serial chain."""
         return {
             "ordered_modules": list(SIM_MODULE_IDS),
             "active_frontier": ["joint1", "tip"],
-            "support_modules": ["joint1", "joint2"],
-            "grounded_modules": ["joint2"],
+            "support_modules": list(SIM_JOINT_IDS),
+            "grounded_modules": [SIM_JOINT_IDS[-1]],
             "coupled_pairs": {
-                "joint1->tip": bool(self.state.tip_joint1_coupled),
-                "joint2->joint1": bool(self.state.joint1_joint2_coupled),
+                pair_key(active_module, passive_module): bool(
+                    getattr(self.state, pair_coupling_attr(active_module, passive_module))
+                )
+                for active_module, passive_module in SIM_ADJACENT_PAIRS
             },
         }
 
@@ -77,12 +113,34 @@ class SimRuntimeBackend:
         next_state.seq = int(next_state.seq) + 1
         next_state.sim_time_s = float(next_state.sim_time_s) + float(self.dt)
         next_state.g += float(command.tip_growth_mm_s) * float(self.dt)
-        next_state.c1 += float(command.joint1_crawl_mm_s) * float(self.dt)
-        next_state.c2 += float(command.joint2_crawl_mm_s) * float(self.dt)
-        next_state.theta1 += float(command.joint1_bend_deg_s) * float(self.dt)
-        next_state.theta2 += float(command.joint2_bend_deg_s) * float(self.dt)
-        next_state.psi1 += float(command.joint1_rotate_deg_s) * float(self.dt)
-        next_state.psi2 += float(command.joint2_rotate_deg_s) * float(self.dt)
+        for module_id in SIM_JOINT_IDS:
+            position_attr = module_position_attr(module_id)
+            bend_attr = module_bend_attr(module_id)
+            orientation_attr = module_orientation_attr(module_id)
+            command_bend = command_bend_attr(module_id)
+            command_rotate = command_rotate_attr(module_id)
+            assert bend_attr is not None
+            assert orientation_attr is not None
+            assert command_bend is not None
+            assert command_rotate is not None
+            setattr(
+                next_state,
+                position_attr,
+                float(getattr(next_state, position_attr))
+                + float(getattr(command, command_linear_attr(module_id))) * float(self.dt),
+            )
+            setattr(
+                next_state,
+                bend_attr,
+                float(getattr(next_state, bend_attr))
+                + float(getattr(command, command_bend)) * float(self.dt),
+            )
+            setattr(
+                next_state,
+                orientation_attr,
+                float(getattr(next_state, orientation_attr))
+                + float(getattr(command, command_rotate)) * float(self.dt),
+            )
         self._advance_pair_geometry(next_state, envelope=envelope, command=command)
         self.state = next_state
         return next_state.copy()
@@ -90,6 +148,29 @@ class SimRuntimeBackend:
     def stop_all(self) -> None:
         """Zero all command outputs without advancing the simulation."""
         self.last_command = SimCommand()
+
+    def step(self) -> SimState:
+        """Advance one simulator tick using the currently latched command."""
+        return self.apply_command(self.snapshot_last_command())
+
+    def update(self) -> SimState:
+        """Compatibility alias for callers expecting an `update()` backend hook."""
+        return self.step()
+
+    def reset(self) -> SimState:
+        """Reset the backend state back to the configured initial state."""
+        self.state = self.initial_state.copy()
+        self.last_command = SimCommand()
+        self.last_envelope = None
+        return self.snapshot_state()
+
+    def visualization_snapshot(self) -> dict[str, object]:
+        """Return a compact snapshot used by GUI and visualizer layers."""
+        return {
+            "state": self.snapshot_state().to_dict(),
+            "last_command": self.snapshot_last_command().to_dict(),
+            "diagnostics": self.diagnostics(),
+        }
 
     def _advance_pair_geometry(
         self,
@@ -100,76 +181,112 @@ class SimRuntimeBackend:
     ) -> None:
         scheduled = None if envelope is None else envelope.scheduled_command
         if scheduled is None:
-            state.tip_joint1_distance_mm = _pair_distance_after_drive(
-                current=state.tip_joint1_distance_mm,
-                drive_mm_s=max(float(command.tip_growth_mm_s), 0.0) + max(float(command.joint1_crawl_mm_s), 0.0),
-                dt=self.dt,
-            )
-            state.joint1_joint2_distance_mm = _pair_distance_after_drive(
-                current=state.joint1_joint2_distance_mm,
-                drive_mm_s=max(float(command.joint1_crawl_mm_s), 0.0) + max(float(command.joint2_crawl_mm_s), 0.0),
-                dt=self.dt,
-            )
+            for active_module, passive_module in SIM_ADJACENT_PAIRS:
+                distance_attr = pair_distance_attr(active_module, passive_module)
+                current_distance = getattr(state, distance_attr)
+                if current_distance is not None:
+                    setattr(
+                        state,
+                        distance_attr,
+                        _pair_distance_after_drive(
+                            current=current_distance,
+                            drive_mm_s=_pair_linear_drive(command, active_module, passive_module),
+                            dt=self.dt,
+                        ),
+                    )
+                orientation_attr = pair_orientation_attr(active_module, passive_module)
+                current_orientation = getattr(state, orientation_attr)
+                if current_orientation is not None:
+                    setattr(
+                        state,
+                        orientation_attr,
+                        _move_toward_zero(
+                            current_orientation,
+                            drive_deg_s=_pair_rotate_drive(command, active_module, passive_module),
+                            dt=self.dt,
+                        ),
+                    )
+                self._update_pair_coupling_state(state, active_module, passive_module, skill_key=None)
             return
 
-        pair_name = f"{scheduled.active_module}->{scheduled.passive_module}"
-        if pair_name == "joint1->tip":
-            state.tip_joint1_distance_mm = _pair_distance_after_drive(
-                current=state.tip_joint1_distance_mm,
-                drive_mm_s=_module_linear_drive(command, scheduled.active_module),
-                dt=self.dt,
-            )
-            state.tip_joint1_orientation_error_deg = _move_toward_zero(
-                state.tip_joint1_orientation_error_deg,
-                drive_deg_s=_module_rotate_drive(command, scheduled.active_module),
-                dt=self.dt,
-            )
-            self._update_coupled_state_for_tip_joint1(state, skill_key=scheduled.skill_key)
+        active_module = str(scheduled.active_module)
+        passive_module = str(scheduled.passive_module)
+        if (active_module, passive_module) not in SIM_ADJACENT_PAIRS:
             return
-        if pair_name == "joint2->joint1":
-            state.joint1_joint2_distance_mm = _pair_distance_after_drive(
-                current=state.joint1_joint2_distance_mm,
-                drive_mm_s=_module_linear_drive(command, scheduled.active_module),
-                dt=self.dt,
+        distance_attr = pair_distance_attr(active_module, passive_module)
+        current_distance = getattr(state, distance_attr)
+        if current_distance is not None:
+            setattr(
+                state,
+                distance_attr,
+                _pair_distance_after_drive(
+                    current=current_distance,
+                    drive_mm_s=_module_linear_drive(command, active_module),
+                    dt=self.dt,
+                ),
             )
-            state.joint1_joint2_orientation_error_deg = _move_toward_zero(
-                state.joint1_joint2_orientation_error_deg,
-                drive_deg_s=_module_rotate_drive(command, scheduled.active_module),
-                dt=self.dt,
+        orientation_attr = pair_orientation_attr(active_module, passive_module)
+        current_orientation = getattr(state, orientation_attr)
+        if current_orientation is not None:
+            setattr(
+                state,
+                orientation_attr,
+                _move_toward_zero(
+                    current_orientation,
+                    drive_deg_s=_module_rotate_drive(command, active_module),
+                    dt=self.dt,
+                ),
             )
-            self._update_coupled_state_for_joint_joint(state, skill_key=scheduled.skill_key)
+        self._update_pair_coupling_state(
+            state,
+            active_module,
+            passive_module,
+            skill_key=scheduled.skill_key,
+        )
 
     @staticmethod
-    def _update_coupled_state_for_tip_joint1(state: SimState, *, skill_key: str) -> None:
-        """Update the tip-joint coupling flag from the current geometry approximation."""
-        distance_ready = (state.tip_joint1_distance_mm or 0.0) <= 1.0
-        orientation_ready = abs(float(state.tip_joint1_orientation_error_deg or 0.0)) <= 2.0
+    def _update_pair_coupling_state(
+        state: SimState,
+        active_module: str,
+        passive_module: str,
+        *,
+        skill_key: str | None,
+    ) -> None:
+        """Update one pair coupling flag from the stored pair metrics."""
+        coupling_attr = pair_coupling_attr(active_module, passive_module)
+        distance_value = getattr(state, pair_distance_attr(active_module, passive_module))
+        orientation_value = getattr(state, pair_orientation_attr(active_module, passive_module))
         if skill_key == "coarse_approach":
-            state.tip_joint1_coupled = False
+            setattr(state, coupling_attr, False)
             return
-        state.tip_joint1_coupled = bool(distance_ready and orientation_ready)
-
-    @staticmethod
-    def _update_coupled_state_for_joint_joint(state: SimState, *, skill_key: str) -> None:
-        """Update the joint-joint coupling flag from the current geometry approximation."""
-        distance_ready = (state.joint1_joint2_distance_mm or 0.0) <= 1.0
-        orientation_ready = abs(float(state.joint1_joint2_orientation_error_deg or 0.0)) <= 2.0
-        if skill_key == "coarse_approach":
-            state.joint1_joint2_coupled = False
+        if distance_value is None or orientation_value is None:
             return
-        state.joint1_joint2_coupled = bool(distance_ready and orientation_ready)
+        distance_ready = float(distance_value) <= 1.0
+        orientation_ready = abs(float(orientation_value)) <= 2.0
+        setattr(state, coupling_attr, bool(distance_ready and orientation_ready))
 
 
 def _module_linear_drive(command: SimCommand, module_id: str) -> float:
     """Return the positive linear drive applied by one module."""
-    if module_id == "tip":
-        return max(float(command.tip_growth_mm_s), 0.0)
-    return max(float(getattr(command, f"{module_id}_crawl_mm_s", 0.0)), 0.0)
+    return max(float(getattr(command, command_linear_attr(module_id))), 0.0)
 
 
 def _module_rotate_drive(command: SimCommand, module_id: str) -> float:
     """Return the absolute rotational drive applied by one module."""
-    return abs(float(getattr(command, f"{module_id}_rotate_deg_s", 0.0)))
+    rotate_attr = command_rotate_attr(module_id)
+    if rotate_attr is None:
+        return 0.0
+    return abs(float(getattr(command, rotate_attr)))
+
+
+def _pair_linear_drive(command: SimCommand, active_module: str, passive_module: str) -> float:
+    """Return the linear drive that heuristically closes one pair without a scheduled envelope."""
+    return _module_linear_drive(command, active_module) + _module_linear_drive(command, passive_module)
+
+
+def _pair_rotate_drive(command: SimCommand, active_module: str, passive_module: str) -> float:
+    """Return the rotational drive that heuristically reduces one pair's orientation error."""
+    return max(_module_rotate_drive(command, active_module), _module_rotate_drive(command, passive_module))
 
 
 def _pair_distance_after_drive(current: float | None, *, drive_mm_s: float, dt: float) -> float:
@@ -189,3 +306,6 @@ def _move_toward_zero(current: float | None, *, drive_deg_s: float, dt: float) -
     if current_value < 0.0:
         return min(0.0, current_value + delta)
     return 0.0
+
+
+__all__ = ["SIM_BACKEND_VERSION", "SimRuntimeBackend"]

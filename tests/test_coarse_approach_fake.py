@@ -13,7 +13,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from mpc_control_new.control_core.models.skill_types import SkillSpec
 from mpc_control_new.control_core.skills.coarse_approach import CoarseApproachSkill
-from mpc_control_new.controllers.adapters.legacy_extractors import extract_tip_joint1_relation_state
+from mpc_control_new.control_core.controllers.adapters.legacy_extractors import (
+    extract_tip_joint1_relation_state,
+)
 
 
 def _build_estimate(

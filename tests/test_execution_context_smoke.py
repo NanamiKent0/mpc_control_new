@@ -16,7 +16,9 @@ from mpc_control_new.control_core.models.skill_types import SkillSpec
 from mpc_control_new.control_core.skills.coarse_approach import CoarseApproachSkill
 from mpc_control_new.control_core.topology.chain_topology import ChainTopology
 from mpc_control_new.control_core.topology.relation_state import RelationState
-from mpc_control_new.controllers.adapters.skill_controller_adapter import SkillControllerAdapter
+from mpc_control_new.control_core.controllers.adapters.skill_controller_adapter import (
+    SkillControllerAdapter,
+)
 
 
 def _build_adapter_estimate() -> SimpleNamespace:

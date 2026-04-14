@@ -35,12 +35,15 @@ class RuntimeSessionSimEndToEndSmokeTest(unittest.TestCase):
         second = session.step()
 
         self.assertTrue(first.accepted)
+        self.assertTrue(second.accepted)
         self.assertEqual(first.diagnostics["input_source"], "runtime_frame:sim")
         self.assertEqual(first.diagnostics["dispatch_target"], "sim")
         self.assertEqual(first.diagnostics["provider_kind"], "sim")
         self.assertEqual(first.dispatch_result.diagnostics["dispatch_target"], "sim")
         self.assertIsNotNone(first.dispatch_envelope)
         self.assertEqual(first.dispatch_envelope.input_source, "runtime_frame:sim")
+        self.assertFalse(first.diagnostics["legacy_path_used"])
+        self.assertLess(second.frame.pair_observations["joint1->tip"].distance_mm, first.frame.pair_observations["joint1->tip"].distance_mm)
         self.assertEqual(second.scheduler_step_result.scheduler_state.current_node_id, "fine_dock")
 
 

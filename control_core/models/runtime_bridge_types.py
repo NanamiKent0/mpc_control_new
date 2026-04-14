@@ -114,6 +114,8 @@ class SchedulerDispatchEnvelope:
                     ),
                     "selected_primitives": list(skill_result.selected_primitives),
                     "bridge_source": "skill_scheduler.runtime_bridge",
+                    "gui_ros2_compatible": False,
+                    "self_contained": True,
                     **dict(skill_result.diagnostics),
                 },
             )
@@ -136,6 +138,8 @@ class SchedulerDispatchEnvelope:
                 "bridge_source": "skill_scheduler.runtime_bridge",
                 "provider_hint": provider_hint,
                 "dispatcher_hint": dispatcher_hint,
+                "gui_ros2_compatible": False,
+                "self_contained": True,
                 "command_summary": dict(command_summary),
             },
         )
@@ -159,6 +163,8 @@ def _empty_command_summary(graph_id: str | None) -> dict[str, object]:
         "selected_primitives": [],
         "module_ids": [],
         "dispatch_ready": False,
+        "gui_ros2_compatible": False,
+        "self_contained": True,
     }
 
 
@@ -183,4 +189,6 @@ def _build_command_summary(
         "selected_primitives": list(selected_primitives),
         "module_ids": module_ids,
         "dispatch_ready": True,
+        "gui_ros2_compatible": False,
+        "self_contained": True,
     }

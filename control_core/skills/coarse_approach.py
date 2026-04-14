@@ -6,7 +6,7 @@ from ..models.execution_context import ExecutionContext
 from ..models.skill_types import PrimitiveReference, SkillCheckResult, SkillCompletionResult, SkillSpec
 from ..topology.chain_topology import ChainTopology
 from ..topology.relation_state import RelationState
-from ...mpc.solvers.scalar_distance_mpc import ScalarDistanceMPC
+from ..mpc.solvers.scalar_distance_mpc import ScalarDistanceMPC
 from .base import RelationSkill
 
 

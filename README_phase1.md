@@ -154,3 +154,73 @@ The following work remains intentionally deferred after Phase 8:
 - Production-quality sim/live command semantics, safety gates, actuator acknowledgements, and recovery handling.
 - More advanced graph execution semantics such as branch joins, parallel execution, and production supervision.
 - Solver upgrades beyond the current fake/smoke runtime scaffold.
+
+## Phase 9
+
+Phase 9 closes the standalone runtime path so `mpc_control_new` can keep evolving as the new trunk:
+
+- ROS2 runtime integration is now a concrete minimal path rather than only a contract shell. `ros2_topic_config.py`, `ros2_interfaces.py`, `ros2_message_adapters.py`, `ros2_runtime_node.py`, `live_runtime_provider.py`, and `live_command_dispatcher.py` now define topic semantics, JSON/string-compatible payload adaptation, a shared runtime node wrapper, and provider/dispatcher objects that either run through `rclpy` or degrade cleanly with structured diagnostics.
+- `RuntimeSession` is now the formal main entry for both sim and ROS2. It exposes reset/snapshot helpers, stable step diagnostics, explicit `build_sim_runtime_session(...)` / `build_ros2_runtime_session(...)` constructors, and a runtime-step result rich enough to drive CLI demos, GUI state projection, and smoke tests without falling back to legacy runtime hooks.
+- The self-contained sim path now exposes enough state for later GUI/ROS2 topic bridging. The backend tracks initial state, reset, last envelope/skill metadata, and visualization snapshots. The sim observation provider and command dispatcher surface backend state, command state, and dispatch counters in runtime diagnostics.
+- `runtime_integration/apps/` now provides standalone entry points for sim and ROS2 runtime demos. These launch paths only depend on `mpc_control_new`, so the package can be exercised from its own independent root.
+- Self-containment checks now scan the new GUI, sim, ROS2, and app paths and reject both old import statements and hard-coded legacy absolute paths.
+
+## Deferred To Phase 10
+
+The following work remains intentionally deferred after Phase 9:
+
+- Real ROS2 custom message definitions and validation against an actual ROS2 graph or hardware topics beyond the current JSON/string-compatible minimal path.
+- Canonical GUI convergence onto the user-owned `gui_ros2.py` topic contract.
+- Supervisor-grade lifecycle management, recovery trees, and multi-graph orchestration.
+- Migration of M3/M4/M7/M8 and broader production-path controller parity.
+- More advanced observation synthesis, richer topology reconstruction, and production-quality actuator acknowledgement / safety handling.
+- More advanced graph execution semantics such as branch joins, parallel execution, and production supervision.
+- Solver upgrades beyond the current fake/smoke runtime scaffold.
+
+## Phase 10
+
+Phase 10 closes the GUI/runtime baseline around the user-owned ROS2 GUI:
+
+- `runtime_integration/gui/gui_ros2.py` is now the only formal GUI entry inside `mpc_control_new`. The temporary debug GUI stack created in the previous phase was removed instead of being maintained in parallel.
+- `runtime_integration/common/encoder_protocol.py` now carries the minimal protocol surface needed by the GUI and the new runtime adapters, so the package no longer depends on an external top-level `encoder_protocol.py`.
+- The sim and live ROS2 boundaries now both speak the same compact topic contract used by the GUI: `tip|jointN/motor_command` and `tip|jointN/motor_feedback`. `live_runtime_provider.py`, `live_command_dispatcher.py`, `sim_observation_provider.py`, and `sim_command_dispatcher.py` all report explicit `gui_ros2_compatible` diagnostics.
+- `ros2_runtime_node.py` now includes a loopback topic broker and GUI-topic-aware publisher/subscription helpers, so fake/shim tests can exercise the real topic contract without online hardware.
+- `runtime_integration/gui/gui_ros2.py` is now the only formal GUI launch entry. It owns backend discovery, embedded sim bootstrap, live ROS2 probing, command fan-out, dual-feedback aggregation, and headless launch diagnostics directly.
+- 正式 GUI 启动方式固定为：
+  `cd /home/cty/mpc_control_new/runtime_integration/gui`
+  `python3 gui_ros2.py`
+- 从工程根目录运行同一文件路径也等价；用户不再需要根据 sim / live ROS2 场景切换不同 GUI 启动脚本。
+- `runtime_integration/apps/run_sim_runtime_demo.py` 和 `runtime_integration/apps/run_ros2_runtime_demo.py` 仅保留为内部 demo / 诊断脚本，不是正式 GUI 入口。
+- Self-containment checks now guard against legacy imports, stale absolute paths, and top-level `encoder_protocol` imports.
+
+## Phase 11
+
+Phase 11 restores the old working style of "independent sim visualizer + independent GUI control panel" inside the new package:
+
+- `runtime_integration/sim_backend/ros2_backend.py` now exposes a standalone simulator backend that subscribes to the same compact ROS2 motor-command topics used by `runtime_integration/gui/gui_ros2.py`.
+- `runtime_integration/sim_backend/visualizer.py` now provides a separate visualizer process that subscribes to `sim/state` and renders the tip / joint1 / joint2 chain in its own window.
+- `runtime_integration/sim_backend/run_sim_backend.py`, `runtime_integration/sim_backend/run_sim_visualizer.py`, and `runtime_integration/sim_backend/start_gui_sim_stack.sh` now provide the independent sim launch path fully inside `mpc_control_new`.
+- The canonical GUI is still only `runtime_integration/gui/gui_ros2.py`. The visualizer is not embedded into the GUI.
+- The migrated sim stack no longer imports legacy `sim` modules or legacy project paths.
+
+## Current Launch Path
+
+正式 GUI 入口固定为：
+
+- `runtime_integration/gui/gui_ros2.py`
+
+推荐使用方式：
+
+第一终端：
+
+- `bash /home/cty/mpc_control_new/runtime_integration/sim_backend/start_gui_sim_stack.sh`
+
+第二终端：
+
+- `python3 /home/cty/mpc_control_new/runtime_integration/gui/gui_ros2.py`
+
+说明：
+
+- sim visualizer 是独立窗口/独立进程，不嵌入 `gui_ros2.py`
+- sim backend、sim visualizer、GUI 通过当前 compact ROS2 topic 语义联动
+- 新架构下的 sim 栈只依赖 `mpc_control_new` 内部路径，可在 `/home/cty/mpc_control_new` 下独立继续开发

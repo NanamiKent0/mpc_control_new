@@ -16,10 +16,19 @@ FORBIDDEN_IMPORT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("old_project_import", re.compile(r"^\s*import\s+old_project(?:\.|\b)", re.MULTILINE)),
     ("legacy_package_import", re.compile(r"^\s*from\s+legacy(?:\.|\s+import\b)", re.MULTILINE)),
     ("legacy_package_import", re.compile(r"^\s*import\s+legacy(?:\.|\b)", re.MULTILINE)),
+    (
+        "top_level_encoder_protocol_import",
+        re.compile(r"^\s*from\s+encoder_protocol\s+import\b", re.MULTILINE),
+    ),
+    (
+        "top_level_encoder_protocol_import",
+        re.compile(r"^\s*import\s+encoder_protocol(?:\.|\b)", re.MULTILINE),
+    ),
 )
 
 FORBIDDEN_TEXT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("legacy_absolute_path", re.compile(r"/home/cty/MPC_control")),
+    ("legacy_gui_absolute_path", re.compile(r"/home/cty/Documents/PlatformIO/Projects/GUI")),
 )
 
 
@@ -39,21 +48,32 @@ def default_package_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def iter_python_source_files(package_root: str | Path | None = None) -> list[Path]:
-    """Return Python source files covered by the self-containment scan."""
+def iter_self_containment_source_files(package_root: str | Path | None = None) -> list[Path]:
+    """Return source/doc files covered by the self-containment scan."""
     root = Path(package_root) if package_root is not None else default_package_root()
-    return [
+    files = [
         file_path
         for file_path in sorted(root.rglob("*.py"))
         if "__pycache__" not in file_path.parts
     ]
+    files.extend(
+        [
+            file_path
+            for file_path in sorted(root.rglob("*.sh"))
+            if "__pycache__" not in file_path.parts
+        ]
+    )
+    readme_path = root / "README_phase1.md"
+    if readme_path.exists():
+        files.append(readme_path)
+    return files
 
 
 def run_self_containment_check(package_root: str | Path | None = None) -> SelfContainmentReport:
     """Scan the package tree for forbidden imports that would break after relocation."""
     root = Path(package_root) if package_root is not None else default_package_root()
     violations: dict[str, list[str]] = {}
-    scanned_paths = [str(file_path) for file_path in iter_python_source_files(root)]
+    scanned_paths = [str(file_path) for file_path in iter_self_containment_source_files(root)]
     for file_path in scanned_paths:
         matches = scan_file_for_forbidden_imports(file_path)
         if matches:
@@ -68,13 +88,24 @@ def run_self_containment_check(package_root: str | Path | None = None) -> SelfCo
 
 
 def scan_file_for_forbidden_imports(file_path: str | Path) -> list[str]:
-    """Scan one Python file for forbidden import statements."""
-    text = Path(file_path).read_text(encoding="utf-8")
+    """Scan one source file for forbidden import statements and stale absolute paths."""
+    resolved_path = Path(file_path)
+    text = resolved_path.read_text(encoding="utf-8")
     hits: list[str] = []
     for label, pattern in FORBIDDEN_IMPORT_PATTERNS:
         if pattern.search(text):
             hits.append(label)
-    for label, pattern in FORBIDDEN_TEXT_PATTERNS:
-        if pattern.search(text):
-            hits.append(label)
+    if resolved_path.name != "self_containment_checks.py":
+        for label, pattern in FORBIDDEN_TEXT_PATTERNS:
+            if pattern.search(text):
+                hits.append(label)
     return hits
+
+
+__all__ = [
+    "SelfContainmentReport",
+    "default_package_root",
+    "iter_self_containment_source_files",
+    "run_self_containment_check",
+    "scan_file_for_forbidden_imports",
+]

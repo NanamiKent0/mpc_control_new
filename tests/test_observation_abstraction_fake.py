@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from mpc_control_new.controllers.adapters.legacy_extractors import (
+from mpc_control_new.control_core.controllers.adapters.legacy_extractors import (
     build_geometry_observation_from_legacy_pair,
     relation_state_from_observation,
 )

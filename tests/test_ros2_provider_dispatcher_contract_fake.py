@@ -145,7 +145,7 @@ class Ros2ProviderDispatcherContractFakeTest(unittest.TestCase):
         self.assertEqual(frame.metadata["frame_origin"], "ros2")
         self.assertTrue(dispatch_result.accepted)
         self.assertEqual(dispatch_result.diagnostics["dispatch_target"], "ros2")
-        self.assertEqual(len(runtime_node.published_payloads()), 1)
+        self.assertEqual(len(runtime_node.published_payloads()), 2)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from mpc_control_new.control_core.models.skill_types import SkillSpec
-from mpc_control_new.controllers.adapters.skill_controller_adapter import SkillControllerAdapter
+from mpc_control_new.control_core.controllers.adapters.skill_controller_adapter import (
+    SkillControllerAdapter,
+)
 
 
 def _build_estimate(

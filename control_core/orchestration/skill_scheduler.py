@@ -6,7 +6,7 @@ import inspect
 from copy import deepcopy
 from dataclasses import dataclass
 
-from ...controllers.adapters.skill_controller_adapter import SkillControllerAdapter
+from ..controllers.adapters.skill_controller_adapter import SkillControllerAdapter
 from ...runtime_integration.observation_types import RuntimeObservationFrame
 from ..models.execution_context import ExecutionContext
 from ..models.runtime_bridge_types import SchedulerDispatchEnvelope
