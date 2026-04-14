@@ -289,33 +289,105 @@ class RuntimeSession:
 
     def snapshot_status(self) -> dict[str, object]:
         """Return a structured snapshot for GUI, demos, and tests."""
-        provider_status = self.provider.status()
-        dispatcher_status = self.dispatcher.status()
-        latest_frame = self.provider.get_latest_frame()
+
+        scheduler_state = self.scheduler.state
+        graph_metadata = dict(self.graph_spec.metadata) if self.graph_spec is not None else {}
+
+        provider_kind = _provider_kind(self.observation_provider)
+        dispatcher_kind = _dispatcher_kind(self.command_dispatcher)
+        provider_status = _component_runtime_diagnostics(self.observation_provider)
+        dispatcher_status = _component_runtime_diagnostics(self.command_dispatcher)
+
+        step = self.last_step_result
+        latest_frame = step.frame if step is not None else None
+
+        if latest_frame is None:
+            candidate_frame = provider_status.get("latest_frame")
+            if isinstance(candidate_frame, RuntimeObservationFrame):
+                latest_frame = candidate_frame
 
         tip_extension_mm, tip_heading_deg = self._extract_tip_motion_status(
             latest_frame=latest_frame,
             provider_status=provider_status if isinstance(provider_status, dict) else None,
         )
 
+        step_diagnostics: dict[str, object] = {}
+        dispatch_ready = False
+        input_source = _runtime_input_source(provider_kind)
+        dispatch_target = dispatcher_kind
+
+        if step is not None:
+            step_diagnostics = dict(step.diagnostics or {})
+            input_source = str(step.input_source or input_source)
+            dispatch_target = str(step.dispatch_target or dispatch_target)
+            dispatch_ready = bool(
+                step.dispatch_envelope.dispatch_ready
+                if step.dispatch_envelope is not None
+                else step.accepted
+            )
+
+        selected_joint_id = getattr(self.last_turn_plan, "selected_joint_id", None)
+        if selected_joint_id is None:
+            selected_joint_id = graph_metadata.get("selected_joint_id")
+
+        operator_intent_kind = (
+            self.last_operator_intent.intent_kind
+            if self.last_operator_intent is not None
+            else graph_metadata.get("operator_intent_kind")
+        )
+        target_heading_delta_deg = (
+            self.last_operator_intent.target_heading_delta_deg
+            if self.last_operator_intent is not None
+            else graph_metadata.get("target_heading_delta_deg")
+        )
+
+        latest_step_summary = None
+        if step is not None:
+            latest_step_summary = {
+                "accepted": bool(step.accepted),
+                "reason": step.reason,
+                "provider_kind": step.provider_kind,
+                "dispatcher_kind": step.dispatcher_kind,
+                "input_source": step.input_source,
+                "dispatch_target": step.dispatch_target,
+                "has_dispatch_envelope": step.dispatch_envelope is not None,
+                "diagnostics": dict(step.diagnostics or {}),
+            }
+
         return {
-            "mode": self.mode,
+            "mode": self.session_name,
+            "started": bool(self._started),
             "graph_id": self.graph_spec.graph_id if self.graph_spec is not None else None,
-            "scheduler_state": self.scheduler.state.as_dict(),
+            "graph_metadata": graph_metadata,
+            "scheduler_state": scheduler_state.as_dict(),
+            "current_node_id": scheduler_state.current_node_id,
+            "last_skill_key": scheduler_state.last_skill_key,
+            "is_finished": bool(scheduler_state.is_finished),
+            "provider_kind": provider_kind,
+            "dispatcher_kind": dispatcher_kind,
             "provider_status": provider_status,
             "dispatcher_status": dispatcher_status,
-            "loaded_task_kind": self._loaded_high_level_task.kind if self._loaded_high_level_task is not None else None,
-            "loaded_task_metadata": dict(self._loaded_high_level_task.metadata)
-            if self._loaded_high_level_task is not None
-            else {},
-            "latest_step": self._latest_step_result.to_dict() if self._latest_step_result is not None else None,
-            "last_turn_plan": dict(self._last_turn_plan) if self._last_turn_plan is not None else None,
-
-            # 新增：给 GUI 直接消费的扁平字段
+            "input_source": input_source,
+            "dispatch_target": dispatch_target,
+            "dispatch_ready": dispatch_ready,
+            "operator_intent_kind": operator_intent_kind,
+            "target_heading_delta_deg": target_heading_delta_deg,
+            "selected_joint_id": selected_joint_id,
             "tip_extension_mm": tip_extension_mm,
-            "current_tip_growth_mm": tip_extension_mm,
             "tip_heading_deg": tip_heading_deg,
-            "current_tip_heading_deg": tip_heading_deg,
+            "last_turn_plan_available": self.last_turn_plan is not None,
+            "last_high_level_task_kind": (
+                self.last_high_level_task_request.task_kind
+                if self.last_high_level_task_request is not None
+                else None
+            ),
+            "last_high_level_task_metadata": (
+                dict(self.last_high_level_task_request.metadata)
+                if self.last_high_level_task_request is not None
+                else {}
+            ),
+            "latest_step": latest_step_summary,
+            "step_diagnostics": step_diagnostics,
         }
 
     def run_once(self, *, context: ExecutionContext | None = None) -> RuntimeStepResult:
