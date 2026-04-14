@@ -6,8 +6,8 @@ from ..skills.controller_backed_pair import FrontCooperateSkill, LocalTransferSk
 from ..models.skill_types import SkillDescriptor, SkillResolutionResult
 from ..skills.coarse_approach import CoarseApproachSkill
 from ..skills.fine_dock import FineDockSkill
+from ..skills.tip_free_growth import TipFreeGrowthSkill
 from ..skills.terminal import TerminalNoopSkill
-from ..skills.terminal import TipFreeGrowthSkill
 from ..topology.chain_topology import ChainTopology
 
 
@@ -84,7 +84,7 @@ def build_default_skill_registry(
     registry = SkillRegistry(source_name="default_skill_registry")
     resolved_coarse = coarse_skill or CoarseApproachSkill(topology=topology)
     resolved_fine = fine_skill or FineDockSkill(topology=topology)
-    resolved_terminal = terminal_skill or TipFreeGrowthSkill(topology=topology)
+    resolved_terminal = terminal_skill or TipFreeGrowthSkill()
     resolved_local_transfer = local_transfer_skill or LocalTransferSkill(topology=topology)
     resolved_front_cooperate = front_cooperate_skill or FrontCooperateSkill(topology=topology)
     if getattr(resolved_coarse, "topology", None) is None:
