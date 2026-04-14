@@ -69,6 +69,8 @@ class SimObservationProvider:
 
     def runtime_diagnostics(self) -> dict[str, object]:
         """Return provider diagnostics for runtime-session reporting."""
+        backend_state = self.backend.visualization_snapshot()
+        
         return {
             "provider_kind": self.provider_kind,
             "provider": self.source_name,
@@ -81,9 +83,10 @@ class SimObservationProvider:
             "ros2_gui_compatible": True,
             "gui_ros2_compatible": True,
             "reason": self.last_reason,
-            "backend_state": self.backend.snapshot_state().to_dict(),
-            "last_command": self.backend.snapshot_last_command().to_dict(),
             **self.backend.diagnostics(),
+            "backend_state": backend_state,
+            "latest_backend_state": backend_state,
+            "last_command": self.backend.snapshot_last_command().to_dict(),
         }
 
     def get_latest_frame(self) -> RuntimeObservationFrame | None:

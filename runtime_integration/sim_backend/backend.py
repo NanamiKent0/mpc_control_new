@@ -115,9 +115,11 @@ class SimRuntimeBackend:
 
     def _extract_tip_extension_mm(self, state: SimState) -> float:
         tip_state = state.module_states.get("tip")
-        if tip_state is None:
-            return 0.0
-        return float(tip_state.g_mm)
+        if tip_state is not None:
+            g_mm = getattr(tip_state, "g_mm", None)
+            if g_mm is not None:
+                return float(g_mm)
+        return float(getattr(state, "g", 0.0))
 
     def apply_command(
         self,
@@ -132,6 +134,11 @@ class SimRuntimeBackend:
         next_state.seq = int(next_state.seq) + 1
         next_state.sim_time_s = float(next_state.sim_time_s) + float(self.dt)
         next_state.g += float(command.tip_growth_mm_s) * float(self.dt)
+        tip_state = next_state.module_states.get("tip")
+
+        if tip_state is not None and hasattr(tip_state, "g_mm"):
+            tip_state.g_mm = float(next_state.g)
+            
         for module_id in SIM_JOINT_IDS:
             position_attr = module_position_attr(module_id)
             bend_attr = module_bend_attr(module_id)

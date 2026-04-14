@@ -230,7 +230,7 @@ class RuntimeSession:
             tip_heading_deg = float(metadata.get("tip_heading_deg", tip_heading_deg) or tip_heading_deg)
 
         if provider_status:
-            backend_state = provider_status.get("latest_backend_state")
+            backend_state = (provider_status.get("latest_backend_state") or provider_status.get("backend_state"))
             if isinstance(backend_state, dict):
                 tip_extension_mm = float(backend_state.get("tip_extension_mm", tip_extension_mm) or tip_extension_mm)
                 tip_heading_deg = float(backend_state.get("tip_heading_deg", tip_heading_deg) or tip_heading_deg)
