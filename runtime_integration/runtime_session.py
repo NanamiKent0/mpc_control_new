@@ -157,30 +157,36 @@ class RuntimeSession:
         self.last_high_level_task_request = task_request
         if task_request.task_kind == TIP_FREE_GROWTH:
             self.last_turn_plan = None
+
+            resolved_speed_mm_s = float(task_request.metadata.get("speed_mm_s", 0.0) or 0.0)
+
+            free_growth_metadata = {
+                "runtime_main_path": True,
+                "runtime_dispatch_mode": "scheduler_envelope",
+                "runtime_input_mode": "runtime_frame",
+                "operator_intent": str(task_request.metadata.get("operator_intent", "TIP_FREE_GROWTH")),
+                "operator_intent_kind": str(
+                    task_request.metadata.get("operator_intent_kind", "TIP_FREE_GROWTH")
+                ),
+                "target_heading_delta_deg": task_request.metadata.get("target_heading_delta_deg"),
+                "speed_mm_s": resolved_speed_mm_s,
+                "tip_growth_speed_mm_s": resolved_speed_mm_s,
+                **dict(task_request.metadata),
+            }
+
             graph_spec = build_tip_free_growth_graph(
                 graph_id=str(task_request.metadata.get("graph_id", "tip_free_growth")),
-                metadata={
-                    "runtime_main_path": True,
-                    "runtime_dispatch_mode": "scheduler_envelope",
-                    "runtime_input_mode": "runtime_frame",
-                    "operator_intent": str(task_request.metadata.get("operator_intent", "TIP_FREE_GROWTH")),
-                    "operator_intent_kind": str(
-                        task_request.metadata.get("operator_intent_kind", "TIP_FREE_GROWTH")
-                    ),
-                    "target_heading_delta_deg": task_request.metadata.get("target_heading_delta_deg"),
-                    **dict(task_request.metadata),
-                },
+                metadata=free_growth_metadata,
             )
-            graph_spec.metadata.update(
-                {
-                    "operator_intent": str(task_request.metadata.get("operator_intent", "TIP_FREE_GROWTH")),
-                    "operator_intent_kind": str(
-                        task_request.metadata.get("operator_intent_kind", "TIP_FREE_GROWTH")
-                    ),
-                    "target_heading_delta_deg": task_request.metadata.get("target_heading_delta_deg"),
-                    **dict(task_request.metadata),
-                }
-            )
+
+            graph_spec.metadata.update(free_growth_metadata)
+
+            # 关键：把速度直接塞进 tip_free_growth 节点的 SkillSpec
+            node = graph_spec.nodes.get("tip_free_growth")
+            if node is not None:
+                node.skill_spec.params["tip_growth_speed_mm_s"] = resolved_speed_mm_s
+                node.skill_spec.metadata["tip_growth_speed_mm_s"] = resolved_speed_mm_s
+
             self.load_graph(graph_spec)
             return graph_spec
         if task_request.task_kind != TIP_TURN_AUTONOMOUS:

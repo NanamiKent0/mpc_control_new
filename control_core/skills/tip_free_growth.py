@@ -57,9 +57,19 @@ class TipFreeGrowthSkill(RelationSkill):
         del relation_state
         speed_mm_s = 0.0
         if context is not None:
-            speed_mm_s = float(context.metadata_value("tip_growth_speed_mm_s", 0.0) or 0.0)
+            speed_mm_s = float(
+                context.metadata_value(
+                    "tip_growth_speed_mm_s",
+                    context.metadata_value("speed_mm_s", 0.0),
+                ) or 0.0
+            )
         if abs(speed_mm_s) < 1e-9:
-            speed_mm_s = float(spec.float_param("tip_growth_speed_mm_s", 0.0) or 0.0)
+            speed_mm_s = float(
+                spec.float_param(
+                    "tip_growth_speed_mm_s",
+                    spec.float_param("speed_mm_s", 0.0),
+                ) or 0.0
+            )
 
         return [
             PrimitiveReference(
