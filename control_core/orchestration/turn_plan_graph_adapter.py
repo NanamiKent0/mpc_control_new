@@ -91,16 +91,7 @@ def build_tip_free_growth_graph(
             **dict(metadata or {}),
         },
     )
-    builder.add_node(
-        _terminal_task_node(
-            node_id="tip_free_growth",
-            skill_key="tip_free_growth",
-            plan_node_kind="tip_free_growth",
-            plan=plan,
-            current_active_pair=None,
-            returning_to_tip_free_growth=True,
-        )
-    )
+    builder.add_node(_tip_free_growth_task_node(plan=plan))
     return builder.build(start_node_id="tip_free_growth")
 
 
@@ -260,7 +251,6 @@ def _front_cooperate_spec(plan_node: FrontCooperateNode) -> SkillSpec:
         },
     )
 
-
 def _terminal_task_node(
     *,
     node_id: str,
@@ -269,8 +259,10 @@ def _terminal_task_node(
     plan: FrontCooperationPlan,
     current_active_pair: str | None,
     returning_to_tip_free_growth: bool,
+    retry_limit: int = 1,
+    skill_graph_template: str = "turn_autonomous",
 ) -> TaskNode:
-    return TaskNode(
+        return TaskNode(
         node_id=node_id,
         skill_spec=SkillSpec(
             skill_key=skill_key,
@@ -279,7 +271,7 @@ def _terminal_task_node(
             relation_type="tip_joint",
             metadata={
                 "active_module_type": "tip",
-                "graph_template": "turn_autonomous",
+                "graph_template": skill_graph_template,
                 "plan_node_kind": plan_node_kind,
             },
         ),
@@ -289,8 +281,8 @@ def _terminal_task_node(
             current_active_pair=current_active_pair,
             returning_to_tip_free_growth=returning_to_tip_free_growth,
         ),
+        retry_limit=retry_limit,
     )
-
 
 def _tip_free_growth_task_node(*, plan: FrontCooperationPlan) -> TaskNode:
     return _terminal_task_node(
@@ -300,8 +292,9 @@ def _tip_free_growth_task_node(*, plan: FrontCooperationPlan) -> TaskNode:
         plan=plan,
         current_active_pair=None,
         returning_to_tip_free_growth=True,
+        retry_limit=1_000_000_000,
+        skill_graph_template="tip_free_growth",
     )
-
 
 def _node_metadata(
     plan_node: TurnPlanNode,
@@ -336,7 +329,6 @@ def _node_metadata(
         if value is not None:
             metadata[key] = value
     return metadata
-
 
 __all__ = [
     "TURN_GRAPH_ADAPTER_SOURCE",
