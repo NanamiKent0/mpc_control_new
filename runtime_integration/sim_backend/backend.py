@@ -101,12 +101,7 @@ class SimRuntimeBackend:
         }
     
     def _extract_tip_heading_deg(self, state) -> float:
-        if hasattr(state, "tip_heading_deg"):
-            return float(state.tip_heading_deg)
-        if hasattr(state, "heading_deg"):
-            return float(state.heading_deg)
-        return 0.0
-
+        return float(getattr(state, "psi1", 0.0) + getattr(state, "theta1", 0.0))
 
     def _extract_tip_extension_mm(self, state) -> float:
         return float(getattr(state, "g", 0.0))
@@ -124,10 +119,6 @@ class SimRuntimeBackend:
         next_state.seq = int(next_state.seq) + 1
         next_state.sim_time_s = float(next_state.sim_time_s) + float(self.dt)
         next_state.g += float(command.tip_growth_mm_s) * float(self.dt)
-        tip_state = next_state.module_states.get("tip")
-
-        if tip_state is not None and hasattr(tip_state, "g_mm"):
-            tip_state.g_mm = float(next_state.g)
             
         for module_id in SIM_JOINT_IDS:
             position_attr = module_position_attr(module_id)
